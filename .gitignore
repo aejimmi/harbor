@@ -1,0 +1,11 @@
+/target
+*.swp
+*.swo
+.DS_Store
+
+# Dev
+CLAUDE.md
+AGENTS.md
+AGENTS-CONTEXT.md
+.claude/
+TODO-*
