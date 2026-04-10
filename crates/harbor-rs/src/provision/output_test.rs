@@ -1,4 +1,4 @@
-use super::output::FilteredOutput;
+use super::output::{FilteredOutput, extract_status};
 
 #[test]
 fn test_filtered_output_empty_data_no_crash() {
@@ -60,6 +60,36 @@ fn test_filtered_output_newline_only() {
     let mut out = FilteredOutput::new("srv", None, true);
     out.write_stdout(b"\n\n\n");
     assert!(out.stdout_pending().is_empty());
+}
+
+#[test]
+fn test_extract_status_accepts_sentinel_line() {
+    let got = extract_status("::step:: Installing Docker");
+    assert_eq!(got.as_deref(), Some("Installing Docker"));
+}
+
+#[test]
+fn test_extract_status_trims_inner_whitespace() {
+    let got = extract_status("::step::   Configuring UFW  ");
+    assert_eq!(got.as_deref(), Some("Configuring UFW"));
+}
+
+#[test]
+fn test_extract_status_rejects_dpkg_noise() {
+    // The exact shape of the leak that motivated the sentinel fix.
+    let dpkg = "Installing new version of config file \
+                /etc/cloud/templates/sources.list.debian.deb822.tmpl ... (1 of 7)";
+    assert_eq!(extract_status(dpkg), None);
+}
+
+#[test]
+fn test_extract_status_rejects_unrelated_lines() {
+    assert_eq!(extract_status(""), None);
+    assert_eq!(extract_status("Reading package lists..."), None);
+    assert_eq!(
+        extract_status("Setting up libc6:amd64 (2.39-0ubuntu8.4)"),
+        None
+    );
 }
 
 #[test]

@@ -13,7 +13,16 @@ targets = [
 ]
 
 [advisories]
-ignore = []
+ignore = [
+    # Marvin Attack: RSA timing sidechannel in `rsa` crate, pulled in
+    # transitively via russh -> rsa. Medium severity (5.9). No upstream
+    # fix available. Harbor uses russh only for outbound SSH to the
+    # user's own Hetzner servers over trusted network paths — the
+    # attacker model this advisory addresses (observing timing over
+    # the network against a public RSA service) does not apply.
+    # Re-evaluate when russh migrates to a constant-time RSA impl.
+    "RUSTSEC-2023-0071",
+]
 
 [licenses]
 allow = [

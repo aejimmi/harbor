@@ -1,6 +1,6 @@
 use crate::config::PathMode;
 
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Configure the system PATH via `/etc/profile.d/custom-path.sh`.
 pub struct PathComponent {
@@ -14,7 +14,7 @@ impl ScriptComponent for PathComponent {
             return Vec::new();
         }
 
-        let mut lines = vec!["echo 'Configuring PATH'".to_owned()];
+        let mut lines = vec![status_echo("Configuring PATH")];
 
         for p in &self.paths {
             let line = match self.mode {

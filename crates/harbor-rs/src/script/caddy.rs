@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Install Caddy web server from official repository.
 pub struct CaddyComponent;
@@ -6,7 +6,7 @@ pub struct CaddyComponent;
 impl ScriptComponent for CaddyComponent {
     fn render(&self) -> Vec<String> {
         vec![
-            "echo 'Installing Caddy'".to_owned(),
+            status_echo("Installing Caddy"),
             "apt-get install -y debian-keyring debian-archive-keyring apt-transport-https"
                 .to_owned(),
             "curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \

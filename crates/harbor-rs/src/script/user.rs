@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Create a system user account.
 pub struct SystemUserComponent {
@@ -26,7 +26,7 @@ impl ScriptComponent for SystemUserComponent {
         let _ = write!(cmd, " {} || true", self.name);
 
         vec![
-            "echo 'Creating system user'".to_owned(),
+            status_echo("Creating system user"),
             cmd,
             // Verify the user exists (fail loud if it doesn't)
             format!(

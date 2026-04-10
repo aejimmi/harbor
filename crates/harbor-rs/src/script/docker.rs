@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Install Docker CE and plugins.
 pub struct DockerComponent;
@@ -6,7 +6,7 @@ pub struct DockerComponent;
 impl ScriptComponent for DockerComponent {
     fn render(&self) -> Vec<String> {
         vec![
-            "echo 'Setting up Docker'".to_owned(),
+            status_echo("Setting up Docker"),
             "install -m 0755 -d /etc/apt/keyrings".to_owned(),
             "curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
              | gpg --dearmor -o /etc/apt/keyrings/docker.gpg"

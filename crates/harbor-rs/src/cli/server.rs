@@ -57,6 +57,7 @@ async fn create(action: ServerAction, config_path: Option<&Path>) -> Result<()> 
         user_config.github.token_for(&setup_config.name),
         config_dir,
     )
+    .context("building setup script")?
     .build();
 
     let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);

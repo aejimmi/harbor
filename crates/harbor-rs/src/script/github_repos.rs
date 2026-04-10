@@ -1,6 +1,6 @@
 use crate::config::GithubRepo;
 
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Clone, build, and install GitHub repositories.
 pub struct GithubReposComponent {
@@ -16,7 +16,7 @@ impl ScriptComponent for GithubReposComponent {
         }
 
         let mut lines = vec![
-            "echo 'Installing GitHub repositories'".to_owned(),
+            status_echo("Installing GitHub repositories"),
             "source /etc/environment || true".to_owned(),
             "export GOPATH=/root/go".to_owned(),
             "export PATH=/usr/local/go/bin:$PATH:$GOPATH/bin".to_owned(),
@@ -34,7 +34,7 @@ impl ScriptComponent for GithubReposComponent {
         } else {
             lines.extend([
                 "# Configure git for private repos".to_owned(),
-                "echo 'Configuring git with GitHub token'".to_owned(),
+                status_echo("Configuring git with GitHub token"),
                 format!("export GITHUB_TOKEN=\"{}\"", self.github_token),
                 "git config --global url.\"https://${GITHUB_TOKEN}@github.com/\"\
                  .insteadOf \"https://github.com/\""
@@ -55,7 +55,7 @@ impl GithubReposComponent {
         let base_repo = extract_base_repo(&repo.repo);
         let binary = &repo.binary;
 
-        lines.push(format!("echo 'Installing {}'", repo.repo));
+        lines.push(status_echo(&format!("Installing {}", repo.repo)));
         lines.push("mkdir -p $GOPATH/bin || true".to_owned());
         lines.push("# Clone and build repository locally due to replace directives".to_owned());
         lines.push(format!("cd /tmp && rm -rf build-{binary}"));
@@ -93,8 +93,11 @@ impl GithubReposComponent {
                 format!("  cp $GOPATH/bin/{binary} {}/{binary}", repo.install_path),
                 format!("  chmod +x {}/{binary}", repo.install_path),
                 format!(
-                    "  echo 'Successfully installed {binary} to {}'",
-                    repo.install_path
+                    "  {}",
+                    status_echo(&format!(
+                        "Successfully installed {binary} to {}",
+                        repo.install_path
+                    ))
                 ),
                 "else".to_owned(),
                 format!("  echo 'Warning: {binary} binary not found in $GOPATH/bin'"),
@@ -129,7 +132,7 @@ impl GithubReposComponent {
         lines.extend([
             format!("chown -R {owner} /etc/usercanal"),
             "chmod -R 644 /etc/usercanal/*".to_owned(),
-            "echo 'Configuration files installed to /etc/usercanal/'".to_owned(),
+            status_echo("Configuration files installed to /etc/usercanal/"),
         ]);
     }
 }

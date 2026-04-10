@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{STATUS_SENTINEL, ScriptComponent, status_echo};
 
 /// Install Rust via rustup.
 pub struct RustComponent;
@@ -6,10 +6,10 @@ pub struct RustComponent;
 impl ScriptComponent for RustComponent {
     fn render(&self) -> Vec<String> {
         vec![
-            "echo 'Installing Rust toolchain'".to_owned(),
+            status_echo("Installing Rust toolchain"),
             "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y".to_owned(),
             "source $HOME/.cargo/env".to_owned(),
-            "echo \"Rust $(rustc --version) installed\"".to_owned(),
+            format!("echo \"{STATUS_SENTINEL} Rust $(rustc --version) installed\""),
         ]
     }
 }

@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// A resolved file to deploy: content already read from source.
 pub struct ResolvedFile {
@@ -20,7 +20,7 @@ impl ScriptComponent for FilesComponent {
             return Vec::new();
         }
 
-        let mut lines = vec!["echo 'Deploying configuration files'".to_owned()];
+        let mut lines = vec![status_echo("Deploying configuration files")];
 
         for file in &self.files {
             lines.push(format!("mkdir -p $(dirname {})", file.target));
@@ -40,7 +40,7 @@ impl ScriptComponent for FilesComponent {
                 lines.push(format!("chmod {} {}", file.mode, file.target));
             }
 
-            lines.push(format!("echo 'Deployed {}'", file.target));
+            lines.push(status_echo(&format!("Deployed {}", file.target)));
         }
 
         lines

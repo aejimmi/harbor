@@ -348,3 +348,215 @@ fn test_deploy_config_missing_file_returns_not_found() {
     let err = DeployConfig::load(&path).unwrap_err();
     assert!(matches!(err, ConfigError::NotFound { .. }));
 }
+
+// --- Container service parse tests (spec 007) ---
+
+#[test]
+fn test_service_spec_parses_native_unchanged() {
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("native.yaml");
+    fs::write(
+        &path,
+        r#"
+setup:
+  services:
+    - name: "myapp"
+      enabled: true
+      start: true
+      user: "appuser"
+      working_directory: "/var/lib/appuser"
+      exec_start: "/usr/local/bin/myapp"
+      restart: "always"
+      restart_sec: 10
+"#,
+    )
+    .expect("write");
+
+    let config = SetupConfig::load(&path).expect("load");
+    let svc = &config.setup.services[0];
+    assert_eq!(svc.name, "myapp");
+    assert!(svc.enabled);
+    assert!(svc.start);
+    assert_eq!(svc.exec_start, "/usr/local/bin/myapp");
+    assert_eq!(svc.restart, "always");
+    assert_eq!(svc.restart_sec, 10);
+    assert!(svc.image.is_none());
+    assert_eq!(svc.runtime, ContainerRuntime::Docker);
+    assert!(svc.ports.is_empty());
+    assert!(svc.volumes.is_empty());
+    assert!(svc.env.is_empty());
+}
+
+#[test]
+fn test_service_spec_parses_container_docker_default() {
+    let yaml = r#"
+setup:
+  services:
+    - name: "web"
+      enabled: true
+      image: "nginx:latest"
+"#;
+    let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
+    let svc = &config.setup.services[0];
+    assert_eq!(svc.image.as_deref(), Some("nginx:latest"));
+    assert_eq!(svc.runtime, ContainerRuntime::Docker);
+}
+
+#[test]
+fn test_service_spec_parses_container_podman_explicit() {
+    let yaml = r#"
+setup:
+  services:
+    - name: "api"
+      enabled: true
+      image: "quay.io/myorg/api:v1"
+      runtime: podman
+"#;
+    let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
+    let svc = &config.setup.services[0];
+    assert_eq!(svc.image.as_deref(), Some("quay.io/myorg/api:v1"));
+    assert_eq!(svc.runtime, ContainerRuntime::Podman);
+}
+
+#[test]
+fn test_service_spec_parses_container_all_fields() {
+    let yaml = r#"
+setup:
+  services:
+    - name: "web"
+      enabled: true
+      image: "nginx:latest"
+      runtime: docker
+      ports:
+        - "80:80"
+        - "443:443/tcp"
+      volumes:
+        - "/etc/nginx:/etc/nginx:ro"
+        - "/var/log/nginx:/var/log/nginx"
+      env:
+        LOG_LEVEL: info
+        APP_ENV: prod
+"#;
+    let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
+    let svc = &config.setup.services[0];
+    assert_eq!(svc.image.as_deref(), Some("nginx:latest"));
+    assert_eq!(svc.runtime, ContainerRuntime::Docker);
+    assert_eq!(svc.ports, vec!["80:80", "443:443/tcp"]);
+    assert_eq!(
+        svc.volumes,
+        vec!["/etc/nginx:/etc/nginx:ro", "/var/log/nginx:/var/log/nginx"]
+    );
+    assert_eq!(svc.env.len(), 2);
+    assert_eq!(svc.env.get("LOG_LEVEL").map(String::as_str), Some("info"));
+    assert_eq!(svc.env.get("APP_ENV").map(String::as_str), Some("prod"));
+}
+
+#[test]
+fn test_from_setup_config_rejects_image_and_exec_start() {
+    let yaml = r#"
+setup:
+  services:
+    - name: "bad"
+      enabled: true
+      image: "nginx:latest"
+      exec_start: "/usr/local/bin/nginx"
+"#;
+    let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
+    let result =
+        crate::script::ScriptBuilder::from_setup_config(&config, "", std::path::Path::new("."));
+    let Err(err) = result else {
+        panic!("expected Err for image + exec_start conflict, got Ok");
+    };
+    let msg = format!("{err}");
+    assert!(msg.contains("bad"), "error should name the service: {msg}");
+    assert!(
+        msg.contains("image") && msg.contains("exec_start"),
+        "error should mention both fields: {msg}"
+    );
+}
+
+#[test]
+fn test_from_setup_config_rejects_empty_string_image() {
+    let yaml = r#"
+setup:
+  services:
+    - name: "web"
+      enabled: true
+      image: ""
+"#;
+    let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
+    let result =
+        crate::script::ScriptBuilder::from_setup_config(&config, "", std::path::Path::new("."));
+    let Err(err) = result else {
+        panic!("expected Err for empty-string image, got Ok");
+    };
+    let msg = format!("{err}");
+    assert!(msg.contains("web"), "error should name the service: {msg}");
+    assert!(
+        msg.contains("image") && msg.contains("empty"),
+        "error should mention empty image: {msg}"
+    );
+}
+
+#[test]
+fn test_from_setup_config_rejects_whitespace_image() {
+    let yaml = r#"
+setup:
+  services:
+    - name: "web"
+      enabled: true
+      image: "   "
+"#;
+    let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
+    let result =
+        crate::script::ScriptBuilder::from_setup_config(&config, "", std::path::Path::new("."));
+    assert!(
+        result.is_err(),
+        "whitespace-only image should be rejected like empty string"
+    );
+}
+
+#[test]
+fn test_service_spec_debug_redacts_env() {
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("DB_PASSWORD".to_owned(), "hunter2".to_owned());
+    env.insert("API_KEY".to_owned(), "s3cr3t".to_owned());
+    let svc = ServiceSpec {
+        name: "web".to_owned(),
+        enabled: true,
+        start: true,
+        user: String::new(),
+        working_directory: String::new(),
+        exec_start: String::new(),
+        restart: String::new(),
+        restart_sec: 0,
+        image: Some("nginx:latest".to_owned()),
+        runtime: ContainerRuntime::Docker,
+        ports: Vec::new(),
+        volumes: Vec::new(),
+        env,
+    };
+    let rendered = format!("{svc:?}");
+    // The secret values must not surface.
+    assert!(
+        !rendered.contains("hunter2"),
+        "Debug output leaked env value: {rendered}"
+    );
+    assert!(
+        !rendered.contains("s3cr3t"),
+        "Debug output leaked env value: {rendered}"
+    );
+    // The key count is surfaced along with a redaction marker so
+    // reviewers know the field is deliberately hidden.
+    assert!(
+        rendered.contains("redacted"),
+        "Debug output must show a redaction marker: {rendered}"
+    );
+    assert!(
+        rendered.contains("2 keys"),
+        "Debug output must show env key count: {rendered}"
+    );
+    // The non-secret fields are still readable.
+    assert!(rendered.contains("web"), "name must still render");
+    assert!(rendered.contains("nginx:latest"), "image must still render");
+}

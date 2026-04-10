@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Set environment variables in `/etc/environment`.
 pub struct EnvComponent {
@@ -13,14 +13,14 @@ impl ScriptComponent for EnvComponent {
             return Vec::new();
         }
 
-        let mut lines = vec!["echo 'Setting up environment variables'".to_owned()];
+        let mut lines = vec![status_echo("Setting up environment variables")];
 
         for (key, value) in &self.vars {
             let upper_key = key.to_uppercase();
             let is_sensitive = upper_key.contains("TOKEN") || upper_key.contains("KEY");
 
             if is_sensitive {
-                lines.push(format!("echo 'Setting up {key}'"));
+                lines.push(status_echo(&format!("Setting up {key}")));
             }
             lines.push(format!(
                 "echo 'export {key}=\"{value}\"' >> /etc/environment"

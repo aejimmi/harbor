@@ -8,11 +8,20 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use console::Style;
+use console::{Style, Term};
 use tokio::task::JoinHandle;
 
 static SPINNER_CHARS: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const TICK_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Fallback width when the terminal size cannot be queried (non-TTY, pipe).
+const FALLBACK_COLS: usize = 80;
+
+/// Overhead chars reserved in the spinner line: spinner glyph + space +
+/// space before timer + "(" + timer + ")". Timer tops out at ~10 chars
+/// (`99m 59s`), so we reserve 14 to keep the arithmetic cheap and leave
+/// one column of slack so the cursor never lands on the right edge.
+const RENDER_OVERHEAD: usize = 14;
 
 /// A ticking spinner with status text that updates in place.
 pub struct Spinner {
@@ -141,13 +150,37 @@ fn render(state: &SpinnerState) {
     let cyan = Style::new().cyan();
     let dim = Style::new().dim();
 
+    let cols = Term::stderr()
+        .size_checked()
+        .map_or(FALLBACK_COLS, |(_rows, c)| c as usize);
+    let budget = cols.saturating_sub(RENDER_OVERHEAD + time_str.chars().count());
+    let step = truncate(&state.step, budget);
+
     eprint!("\r\x1b[K");
     eprint!(
         "{} {} {}",
         cyan.apply_to(spinner_char),
-        state.step,
+        step,
         dim.apply_to(format!("({time_str})"))
     );
+}
+
+/// Truncate `s` to at most `max` chars, appending an ellipsis if cut.
+/// Operates on chars, not bytes, so multibyte glyphs in status text
+/// (paths, repo names) don't split in the middle of a codepoint.
+fn truncate(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let char_count = s.chars().count();
+    if char_count <= max {
+        return s.to_owned();
+    }
+    if max == 1 {
+        return "…".to_owned();
+    }
+    let keep: String = s.chars().take(max - 1).collect();
+    format!("{keep}…")
 }
 
 fn format_duration(d: Duration) -> String {

@@ -1,6 +1,6 @@
 use crate::config::DirectorySpec;
 
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Create directories with specified ownership and permissions.
 pub struct DirectoriesComponent {
@@ -13,7 +13,7 @@ impl ScriptComponent for DirectoriesComponent {
             return Vec::new();
         }
 
-        let mut lines = vec!["echo 'Creating directories'".to_owned()];
+        let mut lines = vec![status_echo("Creating directories")];
 
         for dir in &self.dirs {
             lines.push(format!("mkdir -p {}", dir.path));

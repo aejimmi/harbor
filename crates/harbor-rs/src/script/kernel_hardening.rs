@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Apply kernel network hardening, disable unused modules, core dumps.
 pub struct KernelHardeningComponent;
@@ -6,7 +6,7 @@ pub struct KernelHardeningComponent;
 impl ScriptComponent for KernelHardeningComponent {
     fn render(&self) -> Vec<String> {
         vec![
-            "echo 'Applying kernel hardening'".to_owned(),
+            status_echo("Applying kernel hardening"),
             // Disable unused kernel modules
             "cat > /etc/modprobe.d/disable-unused.conf << 'EOF'
 install dccp /bin/true

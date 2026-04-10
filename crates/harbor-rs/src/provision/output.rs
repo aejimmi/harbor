@@ -1,10 +1,13 @@
 use super::Spinner;
+use crate::script::STATUS_SENTINEL;
 
 /// Output handler for provisioning scripts.
 ///
-/// - **Debug mode**: prints every line with `[server] ` prefix.
-/// - **Normal mode**: extracts status lines (from `echo '...'` in components)
-///   and forwards them to a `Spinner` for display.
+/// - **Debug mode**: prints every line with `[server] ` prefix (with the
+///   status sentinel stripped so it doesn't leak).
+/// - **Normal mode**: extracts sentinel-prefixed status lines emitted by
+///   harbor's `status_echo` helper and forwards them to a `Spinner`.
+///   Arbitrary apt/dpkg output is silently dropped.
 pub(crate) struct FilteredOutput<'a> {
     prefix: String,
     debug: bool,
@@ -54,11 +57,14 @@ impl<'a> FilteredOutput<'a> {
             }
 
             let text = String::from_utf8_lossy(line);
+            let trimmed = text.trim();
+            let status = extract_status(trimmed);
 
             if self.debug {
-                eprintln!("{}{text}", self.prefix);
+                let display = status.as_deref().unwrap_or(trimmed);
+                eprintln!("{}{display}", self.prefix);
             } else if !is_stderr
-                && let Some(status) = extract_status(text.trim())
+                && let Some(status) = status
                 && let Some(spinner) = self.spinner
             {
                 spinner.set_step(status);
@@ -77,38 +83,11 @@ impl<'a> FilteredOutput<'a> {
     }
 }
 
-/// Whitelist approach: only extract lines that are our own status messages.
-/// These come from `echo '...'` in component render() methods.
-fn extract_status(line: &str) -> Option<String> {
-    const STATUS_PREFIXES: &[&str] = &[
-        "Starting ",
-        "Installing ",
-        "Configuring ",
-        "Creating ",
-        "Deploying ",
-        "Deploy of ",
-        "Deployed ",
-        "Applying ",
-        "Setting ",
-        "Enable ",
-        "Service ",
-        "Performing ",
-        "Setup completed",
-        "Updating ",
-        "Cloning ",
-        "Extracting ",
-        "Successfully ",
-    ];
-
-    for prefix in STATUS_PREFIXES {
-        if line.starts_with(prefix) {
-            return Some(line.to_owned());
-        }
-    }
-
-    if line.starts_with("Rust ") || line.starts_with("Go ") {
-        return Some(line.to_owned());
-    }
-
-    None
+/// Extract a harbor status message by stripping the sentinel prefix emitted
+/// by `script::status_echo`. Returns `None` for any line without the sentinel
+/// (apt/dpkg chatter, shell traces, diagnostics) so they don't drive the
+/// spinner.
+pub(super) fn extract_status(line: &str) -> Option<String> {
+    line.strip_prefix(STATUS_SENTINEL)
+        .map(|rest| rest.trim().to_owned())
 }

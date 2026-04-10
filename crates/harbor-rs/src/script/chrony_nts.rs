@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Install chrony and configure NTP with NTS.
 pub struct ChronyNtsComponent;
@@ -6,7 +6,7 @@ pub struct ChronyNtsComponent;
 impl ScriptComponent for ChronyNtsComponent {
     fn render(&self) -> Vec<String> {
         vec![
-            "echo 'Configuring NTP with NTS'".to_owned(),
+            status_echo("Configuring NTP with NTS"),
             "apt-get install -y chrony".to_owned(),
             "cat > /etc/chrony/chrony.conf << 'EOF'
 confdir /etc/chrony/conf.d

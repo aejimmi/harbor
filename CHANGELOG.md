@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.0
+
+New:
+- services: run any Docker image as a managed service with ports, volumes, and env vars — Harbor handles pull, run, lifecycle, and logs
+- services: Podman Quadlet as an opt-in runtime for daemonless container execution, selected per service
+- services: container env vars stored in 0600 env files on the server instead of inline in world-readable unit files
+- services: Docker or Podman auto-installed based on which runtimes the config references
+- provision: spinner truncates long status lines so they fit the terminal instead of wrapping
+
+Fix:
+- services: secret env values redacted from debug logs and panic output
+- services: config load fails with a clear error when a service sets both image and exec_start
+- services: config load fails with a clear error when image is empty or whitespace-only
+- provision: spinner only advances on harbor's own status lines, ignoring arbitrary apt and dpkg chatter
+
 ## v0.1.0
 
 New:

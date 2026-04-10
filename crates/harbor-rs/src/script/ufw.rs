@@ -1,6 +1,6 @@
 use crate::config::UfwRule;
 
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Configure UFW firewall rules.
 pub struct UfwComponent {
@@ -32,7 +32,7 @@ impl UfwComponent {
 impl ScriptComponent for UfwComponent {
     fn render(&self) -> Vec<String> {
         let mut lines = vec![
-            "echo 'Configuring UFW'".to_owned(),
+            status_echo("Configuring UFW"),
             "ufw --force reset".to_owned(),
             "ufw default deny incoming".to_owned(),
             "ufw default allow outgoing".to_owned(),

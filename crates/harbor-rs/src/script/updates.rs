@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Run system updates, optional kernel upgrade, optional reboot.
 pub struct UpdatesComponent {
@@ -12,7 +12,7 @@ impl ScriptComponent for UpdatesComponent {
         let mut lines = Vec::new();
 
         if self.auto_upgrade {
-            lines.push("echo 'Performing system updates'".to_owned());
+            lines.push(status_echo("Performing system updates"));
             lines.push("apt-get $APT_OPTS upgrade -y".to_owned());
 
             if self.upgrade_kernel {
@@ -21,7 +21,7 @@ impl ScriptComponent for UpdatesComponent {
         }
 
         if self.reboot_after_kernel {
-            lines.push("echo 'Scheduling reboot in 1 minute'".to_owned());
+            lines.push(status_echo("Scheduling reboot in 1 minute"));
             lines.push("shutdown -r +1".to_owned());
         }
 

@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Clone a repo (or pull if exists) and run build/install steps.
 pub struct DeployComponent {
@@ -37,12 +37,12 @@ impl ScriptComponent for DeployComponent {
         let clone_url = Self::clone_url(&self.repo);
 
         let mut lines = vec![
-            format!("echo 'Deploying {}'", self.repo),
+            status_echo(&format!("Deploying {}", self.repo)),
             format!("if [ -d \"$HOME/{repo_name}\" ]; then"),
-            "  echo 'Updating existing repo'".to_owned(),
+            format!("  {}", status_echo("Updating existing repo")),
             format!("  cd $HOME/{repo_name} && git pull"),
             "else".to_owned(),
-            "  echo 'Cloning repo'".to_owned(),
+            format!("  {}", status_echo("Cloning repo")),
             format!("  cd $HOME && git clone {clone_url} {repo_name}"),
             "fi".to_owned(),
             format!("cd $HOME/{repo_name}"),
@@ -59,7 +59,7 @@ impl ScriptComponent for DeployComponent {
                 .to_owned(),
         );
 
-        lines.push(format!("echo 'Deploy of {} complete'", self.repo));
+        lines.push(status_echo(&format!("Deploy of {} complete", self.repo)));
         lines
     }
 }
@@ -76,7 +76,7 @@ impl ScriptComponent for RollbackComponent {
         let repo_name = DeployComponent::repo_name(&self.repo);
 
         let mut lines = vec![
-            format!("echo 'Rolling back to {}'", self.version),
+            status_echo(&format!("Rolling back to {}", self.version)),
             format!("cd $HOME/{repo_name}"),
             format!("git fetch --all"),
             format!("git checkout {}", self.version),
@@ -93,7 +93,10 @@ impl ScriptComponent for RollbackComponent {
                 .to_owned(),
         );
 
-        lines.push(format!("echo 'Rollback to {} complete'", self.version));
+        lines.push(status_echo(&format!(
+            "Rollback to {} complete",
+            self.version
+        )));
         lines
     }
 }

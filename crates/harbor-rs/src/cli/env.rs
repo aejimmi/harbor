@@ -68,6 +68,7 @@ async fn deploy(
         user_config.github.token_for(&setup_config.name),
         config_dir,
     )
+    .context("building setup script")?
     .build();
 
     let provider: Arc<dyn CloudProvider> = Arc::new(

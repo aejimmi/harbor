@@ -9,7 +9,9 @@ mod config_test;
 
 pub use deploy::{DeployConfig, ServerSpec};
 pub use paths::{default_config_path, default_server_config_path, harbor_dir};
-pub use setup::{DirectorySpec, GithubRepo, PathMode, ServiceSpec, SetupConfig, UfwRule};
+pub use setup::{
+    ContainerRuntime, DirectorySpec, GithubRepo, PathMode, ServiceSpec, SetupConfig, UfwRule,
+};
 pub use templates::init_harbor_config;
 // Re-exported for programmatic UserConfig construction (used in tests and future API consumers).
 #[allow(unused_imports)]

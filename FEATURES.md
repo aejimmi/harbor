@@ -34,7 +34,7 @@
 - SSH agent authentication — uses your local ssh-agent keys, tries each key until one succeeds.
 - Connection retry — retries SSH connections up to 30 times with 10-second delays for freshly booted servers.
 - SSH keepalive — sends keepalive every 30 seconds with 10 allowed misses, preventing timeouts during long silent builds.
-- Ticking spinner — live progress indicator with elapsed time that updates as the remote script emits status lines.
+- Ticking spinner — live progress indicator with elapsed time that advances on harbor's own status lines and ignores unrelated apt or dpkg chatter.
 - Server-side logging — setup output is tee'd to `/var/log/setup-<name>.log` on the remote server.
 - Known hosts cleanup — automatically removes server IPs from `~/.ssh/known_hosts` on deletion.
 - Accept new host keys — `ssh`, `exec`, `logs`, and `status` use `StrictHostKeyChecking=accept-new` to auto-trust fresh servers on first connection.
@@ -52,6 +52,11 @@
 - PATH configuration — prepend, append, or overwrite system PATH entries.
 - GitHub repo cloning — clones, builds, and installs Go binaries from GitHub repos using fine-grained tokens via `x-access-token` HTTPS auth.
 - Systemd services — generates, enables, and restarts systemd units so config changes apply on redeploy.
+- Container services via Docker — run any OCI image as a managed service by setting image on a service spec; Harbor handles pull, run, and systemd lifecycle.
+- Container services via Podman — opt-in daemonless runtime selected with runtime: podman, rendered as Quadlet .container files under /etc/containers/systemd/.
+- Container env files — per-service env vars written to /etc/harbor/env/<name>.env with 0600 perms instead of inline in world-readable unit files.
+- Container runtime auto-install — Docker or Podman installed automatically based on which runtimes the config references; nothing installed if no service declares an image.
+- Container config validation — services mixing image and exec_start, or declaring empty image, are rejected at config load with clear errors.
 - UFW firewall — enables UFW and opens specified ports.
 - System updates — optional unattended upgrades, kernel upgrades, and automatic reboot.
 - Hostname configuration — sets server hostname.

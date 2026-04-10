@@ -14,6 +14,7 @@ mod hostname;
 mod kernel_hardening;
 mod packages;
 mod path;
+mod podman;
 mod rust_lang;
 mod services;
 mod ssh_hardening;
@@ -41,6 +42,7 @@ pub use hostname::HostnameComponent;
 pub use kernel_hardening::KernelHardeningComponent;
 pub use packages::PackagesComponent;
 pub use path::PathComponent;
+pub use podman::PodmanComponent;
 pub use rust_lang::RustComponent;
 pub use services::ServicesComponent;
 pub use ssh_hardening::SshHardeningComponent;
@@ -51,7 +53,20 @@ pub use user::SystemUserComponent;
 
 use std::path::Path;
 
-use crate::config::SetupConfig;
+use anyhow::{Result, bail};
+
+use crate::config::{ContainerRuntime, SetupConfig};
+
+/// Sentinel prefix for harbor status lines. Emitted by `status_echo` and
+/// parsed by `provision::output` to drive the spinner. Lets harbor's own
+/// progress messages pass through while ignoring arbitrary apt/dpkg chatter.
+pub(crate) const STATUS_SENTINEL: &str = "::step::";
+
+/// Produce a bash `echo` line for a harbor status message. The sentinel is
+/// stripped by the output filter before it reaches the user.
+pub(crate) fn status_echo(msg: &str) -> String {
+    format!("echo '{STATUS_SENTINEL} {msg}'")
+}
 
 /// A component that can render bash script lines.
 pub trait ScriptComponent {
@@ -90,7 +105,7 @@ impl ScriptBuilder {
             r"APT_OPTS='-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef'"
                 .to_owned(),
             String::new(),
-            "echo 'Starting server setup...'".to_owned(),
+            status_echo("Starting server setup"),
             String::new(),
             "# Update package lists".to_owned(),
             "apt-get update".to_owned(),
@@ -105,7 +120,7 @@ impl ScriptBuilder {
             }
         }
 
-        lines.push("echo 'Setup completed successfully'".to_owned());
+        lines.push(status_echo("Setup completed successfully"));
         lines.join("\n")
     }
 
@@ -113,8 +128,46 @@ impl ScriptBuilder {
     ///
     /// `config_dir` is the directory containing the setup YAML — used to resolve
     /// relative `source` paths in `files` entries.
-    pub fn from_setup_config(config: &SetupConfig, github_token: &str, config_dir: &Path) -> Self {
+    ///
+    /// Returns `Err` if any `ServiceSpec` sets both `image` and a
+    /// non-empty `exec_start`, or declares an empty / whitespace-only
+    /// `image`. Auto-installs `DockerComponent` and/or `PodmanComponent`
+    /// based on which container runtimes are referenced by the declared
+    /// services.
+    pub fn from_setup_config(
+        config: &SetupConfig,
+        github_token: &str,
+        config_dir: &Path,
+    ) -> Result<Self> {
         let setup = &config.setup;
+
+        // Reject services that mix native (`exec_start`) and container
+        // (`image`) modes — they are mutually exclusive. Also reject
+        // empty-string images, which would render a broken `docker run`
+        // with no image token.
+        for svc in &setup.services {
+            if svc.image.is_some() && !svc.exec_start.is_empty() {
+                bail!(
+                    "service `{}`: `image` and `exec_start` are mutually exclusive. Remove one.",
+                    svc.name
+                );
+            }
+            if let Some(image) = &svc.image
+                && image.trim().is_empty()
+            {
+                bail!("service `{}`: `image` must not be empty.", svc.name);
+            }
+        }
+
+        let needs_docker_runtime = setup
+            .services
+            .iter()
+            .any(|s| s.image.is_some() && matches!(s.runtime, ContainerRuntime::Docker));
+        let needs_podman_runtime = setup
+            .services
+            .iter()
+            .any(|s| s.image.is_some() && matches!(s.runtime, ContainerRuntime::Podman));
+
         let mut builder = Self::new();
 
         // --- Components that add apt repos (before packages) ---
@@ -187,8 +240,12 @@ impl ScriptBuilder {
             });
         }
 
-        if setup.components.docker.enabled {
+        if setup.components.docker.enabled || needs_docker_runtime {
             builder.add(DockerComponent);
+        }
+
+        if needs_podman_runtime {
+            builder.add(PodmanComponent);
         }
 
         if !setup.github_repos.is_empty() {
@@ -301,6 +358,6 @@ impl ScriptBuilder {
             });
         }
 
-        builder
+        Ok(builder)
     }
 }

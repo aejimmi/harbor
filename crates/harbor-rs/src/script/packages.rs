@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Install system packages via apt-get.
 pub struct PackagesComponent {
@@ -11,7 +11,7 @@ impl ScriptComponent for PackagesComponent {
             return Vec::new();
         }
         vec![
-            "echo 'Installing packages'".to_owned(),
+            status_echo("Installing packages"),
             format!("apt-get install -y {}", self.packages.join(" ")),
         ]
     }

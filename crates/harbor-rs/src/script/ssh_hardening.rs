@@ -1,4 +1,4 @@
-use super::ScriptComponent;
+use super::{ScriptComponent, status_echo};
 
 /// Apply standard SSH hardening to sshd_config.
 pub struct SshHardeningComponent;
@@ -6,7 +6,7 @@ pub struct SshHardeningComponent;
 impl ScriptComponent for SshHardeningComponent {
     fn render(&self) -> Vec<String> {
         vec![
-            "echo 'Applying SSH hardening'".to_owned(),
+            status_echo("Applying SSH hardening"),
             "sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config"
                 .to_owned(),
             "sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"

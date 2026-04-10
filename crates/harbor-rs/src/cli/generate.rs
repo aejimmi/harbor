@@ -10,7 +10,8 @@ pub fn run(setup_config_path: &Path, hostname: Option<&str>) -> Result<()> {
     let setup_config = SetupConfig::load(setup_config_path).context("loading setup config")?;
 
     let config_dir = setup_config_path.parent().unwrap_or(Path::new("."));
-    let mut builder = ScriptBuilder::from_setup_config(&setup_config, "", config_dir);
+    let mut builder = ScriptBuilder::from_setup_config(&setup_config, "", config_dir)
+        .context("building setup script")?;
 
     if let Some(h) = hostname {
         builder.add(crate::script::HostnameComponent {
