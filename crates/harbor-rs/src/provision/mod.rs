@@ -1,5 +1,8 @@
 pub(crate) mod output;
+mod spinner;
 mod ssh;
+
+pub use spinner::Spinner;
 
 #[cfg(test)]
 mod output_test;
@@ -44,11 +47,15 @@ impl Provisioner {
     }
 
     /// Connect to a server via SSH and execute the setup script.
+    ///
+    /// If `spinner` is provided, status lines from the script update the spinner.
+    /// If `None`, output is silent (or raw in debug mode).
     pub async fn provision(
         &self,
         ip: IpAddr,
         server_name: &str,
         script: &str,
+        spinner: Option<&Spinner>,
     ) -> Result<(), ProvisionError> {
         let handle = ssh::connect_with_retry(ip, server_name, self.debug, self.quiet).await?;
 
@@ -60,7 +67,15 @@ impl Provisioner {
              {script}"
         );
 
-        ssh::execute_script(handle, server_name, &wrapped_script, self.debug, self.quiet).await
+        ssh::execute_script(
+            handle,
+            server_name,
+            &wrapped_script,
+            spinner,
+            self.debug,
+            self.quiet,
+        )
+        .await
     }
 }
 

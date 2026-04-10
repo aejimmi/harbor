@@ -2,71 +2,56 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{discover, output};
-use crate::config::UserConfig;
-use crate::provider::CloudProvider;
-use crate::provision::Provisioner;
+use super::{output, remote};
+use crate::config::SetupConfig;
+use crate::provision::{Provisioner, Spinner};
+use crate::script::{DeployComponent, ScriptComponent};
 
-pub async fn run(config_path: Option<&Path>) -> Result<()> {
-    let (setup_config, _) = discover::load_project_config()?;
-    let server = setup_config
-        .server
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no 'server:' section in harbor.yaml"))?;
+/// Build a deploy script with lock, deploy steps, and health checks.
+fn build_deploy_script(setup_config: &SetupConfig) -> Result<String> {
     let deploy = setup_config
         .setup
         .deploy
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("no 'deploy:' section in harbor.yaml"))?;
 
-    let user_config = UserConfig::load(config_path).context("loading user config")?;
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
-
-    let existing = provider
-        .get_server(&server.name)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("server '{}' not found — run `harbor up` first", server.name))?;
-    let ip = existing
-        .ip
-        .ok_or_else(|| anyhow::anyhow!("server '{}' has no IP", server.name))?;
-
-    output::header(&format!("Deploying to {} ({})", server.name, ip));
-
-    let repo_name = deploy
-        .repo
-        .rsplit('/')
-        .next()
-        .unwrap_or(&deploy.repo)
-        .trim_end_matches(".git");
-    let clone_url = if deploy.repo.starts_with("http") {
-        deploy.repo.clone()
-    } else {
-        format!("https://{}", deploy.repo)
-    };
-
-    let mut script_lines = vec![
-        "#!/bin/bash".to_owned(),
-        "set -e".to_owned(),
-        String::new(),
-        format!("if [ -d \"$HOME/{repo_name}\" ]; then"),
-        format!("  cd $HOME/{repo_name} && git pull"),
-        "else".to_owned(),
-        format!("  cd $HOME && git clone {clone_url} {repo_name}"),
-        "fi".to_owned(),
-        format!("cd $HOME/{repo_name}"),
-    ];
-    for step in &deploy.steps {
-        script_lines.push(step.clone());
+    let deploy_lines = DeployComponent {
+        repo: deploy.repo.clone(),
+        steps: deploy.steps.clone(),
     }
-    script_lines.push("echo 'Deploy complete'".to_owned());
+    .render();
 
-    let script = script_lines.join("\n");
-    let provisioner = Provisioner::new(false, false);
-    provisioner
-        .provision(ip, &server.name, &script)
+    let services = remote::started_services(setup_config);
+    let svc_refs: Vec<&str> = services.iter().map(String::as_str).collect();
+
+    let mut lines = vec!["#!/bin/bash".to_owned(), "set -e".to_owned(), String::new()];
+
+    lines.extend(remote::lock_preamble());
+    lines.push(String::new());
+    lines.extend(deploy_lines);
+    lines.extend(remote::health_check_lines(&svc_refs));
+
+    Ok(lines.join("\n"))
+}
+
+/// Pull latest code, rebuild, and restart services.
+pub async fn run(debug: bool, config_path: Option<&Path>) -> Result<()> {
+    let server = remote::resolve_server(config_path).await?;
+
+    output::header(&format!("Deploying to {} ({})", server.name, server.ip));
+
+    let script = build_deploy_script(&server.config)?;
+    let spinner = Spinner::start("Connecting via SSH...", debug);
+
+    let provisioner = Provisioner::new(debug, false);
+    if let Err(e) = provisioner
+        .provision(server.ip, &server.name, &script, Some(&spinner))
         .await
-        .context("deploy failed")?;
+    {
+        spinner.fail();
+        return Err(e).context("deploy failed");
+    }
 
-    output::success(&format!("Deployed to {}", server.name));
+    spinner.success(format!("Deployed to {}", server.name));
     Ok(())
 }

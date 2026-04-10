@@ -52,7 +52,7 @@ impl ScriptComponent for ServicesComponent {
             }
 
             if svc.start {
-                lines.push(format!("systemctl start {}", svc.name));
+                lines.push(format!("systemctl restart {}", svc.name));
             }
 
             if svc.enabled || svc.start {

@@ -32,7 +32,12 @@ pub async fn run(service: Option<&str>, config_path: Option<&Path>) -> Result<()
     output::info(&format!("Streaming logs from {} ({})", server.name, ip));
 
     let status = std::process::Command::new("ssh")
-        .args([&format!("root@{ip}"), &journal_cmd])
+        .args([
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            &format!("root@{ip}"),
+            &journal_cmd,
+        ])
         .status()
         .context("failed to launch ssh")?;
 

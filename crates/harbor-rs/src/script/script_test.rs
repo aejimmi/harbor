@@ -1,3 +1,10 @@
+#![allow(
+    clippy::indexing_slicing,
+    clippy::needless_raw_string_hashes,
+    clippy::unwrap_used,
+    clippy::panic
+)]
+
 use std::path::Path;
 
 use super::*;
@@ -166,7 +173,7 @@ fn test_services_component_with_exec_start() {
     );
     assert!(!lines.iter().any(|l| l.contains("usercanal")));
     assert!(lines.iter().any(|l| l.contains("systemctl enable myapp")));
-    assert!(lines.iter().any(|l| l.contains("systemctl start myapp")));
+    assert!(lines.iter().any(|l| l.contains("systemctl restart myapp")));
 }
 
 #[test]
@@ -207,7 +214,7 @@ fn test_services_enable_and_start() {
     };
     let lines = c.render();
     assert!(lines.iter().any(|l| l.contains("systemctl enable caddy")));
-    assert!(lines.iter().any(|l| l.contains("systemctl start caddy")));
+    assert!(lines.iter().any(|l| l.contains("systemctl restart caddy")));
 }
 
 #[test]
@@ -252,8 +259,12 @@ fn test_updates_component_full() {
         reboot_after_kernel: true,
     };
     let lines = c.render();
-    assert!(lines.iter().any(|l| l.contains("apt-get upgrade -y")));
-    assert!(lines.iter().any(|l| l.contains("apt-get dist-upgrade -y")));
+    assert!(
+        lines.iter().any(|l| l.contains("apt-get")
+            && l.contains("upgrade -y")
+            && !l.contains("dist-upgrade"))
+    );
+    assert!(lines.iter().any(|l| l.contains("dist-upgrade -y")));
     assert!(lines.iter().any(|l| l.contains("shutdown -r +1")));
 }
 
@@ -265,7 +276,11 @@ fn test_updates_component_no_kernel() {
         reboot_after_kernel: false,
     };
     let lines = c.render();
-    assert!(lines.iter().any(|l| l.contains("apt-get upgrade -y")));
+    assert!(
+        lines.iter().any(|l| l.contains("apt-get")
+            && l.contains("upgrade -y")
+            && !l.contains("dist-upgrade"))
+    );
     assert!(!lines.iter().any(|l| l.contains("dist-upgrade")));
     assert!(!lines.iter().any(|l| l.contains("shutdown")));
 }
@@ -393,14 +408,33 @@ fn test_deploy_component() {
         ],
     };
     let lines = c.render();
+    // Clone-or-pull logic
+    assert!(lines.iter().any(|l| l.contains("if [ -d")));
+    assert!(lines.iter().any(|l| l.contains("git pull")));
     assert!(
         lines
             .iter()
             .any(|l| l.contains("git clone https://github.com/user/myapp"))
     );
-    assert!(lines.iter().any(|l| l.contains("cd myapp")));
+    assert!(lines.iter().any(|l| l.contains("cd $HOME/myapp")));
+    // Build steps
     assert!(lines.iter().any(|l| l.contains("cargo build --release")));
     assert!(lines.iter().any(|l| l.contains("cp target/release/myapp")));
+}
+
+#[test]
+fn test_deploy_component_records_version() {
+    let c = DeployComponent {
+        repo: "github.com/user/myapp".to_owned(),
+        steps: vec!["make build".to_owned()],
+    };
+    let lines = c.render();
+    assert!(lines.iter().any(|l| l.contains("mkdir -p ~/.harbor")));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("deploys.log") && l.contains("git rev-parse HEAD"))
+    );
 }
 
 #[test]
@@ -410,6 +444,73 @@ fn test_deploy_component_empty_steps() {
         steps: Vec::new(),
     };
     assert!(c.render().is_empty());
+}
+
+#[test]
+fn test_deploy_repo_name() {
+    assert_eq!(DeployComponent::repo_name("github.com/user/myapp"), "myapp");
+    assert_eq!(
+        DeployComponent::repo_name("github.com/user/myapp.git"),
+        "myapp"
+    );
+    assert_eq!(
+        DeployComponent::repo_name("https://github.com/user/myapp"),
+        "myapp"
+    );
+    assert_eq!(DeployComponent::repo_name("myapp"), "myapp");
+}
+
+#[test]
+fn test_deploy_clone_url() {
+    assert_eq!(
+        DeployComponent::clone_url("github.com/user/myapp"),
+        "https://github.com/user/myapp"
+    );
+    assert_eq!(
+        DeployComponent::clone_url("https://github.com/user/myapp"),
+        "https://github.com/user/myapp"
+    );
+    assert_eq!(
+        DeployComponent::clone_url("http://gitlab.com/user/myapp"),
+        "http://gitlab.com/user/myapp"
+    );
+}
+
+#[test]
+fn test_rollback_component() {
+    let c = RollbackComponent {
+        repo: "github.com/user/myapp".to_owned(),
+        version: "abc123f".to_owned(),
+        steps: vec!["cargo build --release".to_owned()],
+    };
+    let lines = c.render();
+    assert!(lines.iter().any(|l| l.contains("Rolling back to abc123f")));
+    assert!(lines.iter().any(|l| l.contains("cd $HOME/myapp")));
+    assert!(lines.iter().any(|l| l.contains("git fetch --all")));
+    assert!(lines.iter().any(|l| l.contains("git checkout abc123f")));
+    assert!(lines.iter().any(|l| l.contains("cargo build --release")));
+    // Records rollback in deploys.log
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("deploys.log") && l.contains("rollback"))
+    );
+}
+
+#[test]
+fn test_rollback_component_records_version() {
+    let c = RollbackComponent {
+        repo: "github.com/user/myapp".to_owned(),
+        version: "def456".to_owned(),
+        steps: vec![],
+    };
+    let lines = c.render();
+    assert!(lines.iter().any(|l| l.contains("mkdir -p ~/.harbor")));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("git rev-parse HEAD") && l.contains("rollback"))
+    );
 }
 
 #[test]
@@ -486,7 +587,7 @@ setup:
     assert!(script.contains("Setting up Docker"));
     assert!(script.contains("timedatectl set-timezone UTC"));
     assert!(script.contains("ufw allow 22/tcp"));
-    assert!(script.contains("apt-get upgrade -y"));
+    assert!(script.contains("apt-get") && script.contains("upgrade -y"));
     assert!(script.contains("Setup completed successfully"));
 }
 

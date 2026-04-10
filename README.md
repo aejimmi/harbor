@@ -1,141 +1,117 @@
 # Harbor
 
-Server orchestration for Hetzner Cloud. Harbor creates servers, provisions them over SSH, and wires up Cloudflare DNS records — all from declarative YAML configs. You describe the fleet, harbor builds it. Written in Rust, compiled to a single static binary that replaces ~3,800 lines of Go.
+Go from `harbor.yaml` to a running server in one command. Harbor creates Hetzner Cloud servers, provisions them over SSH, wires up Cloudflare DNS, and deploys your code — all from a single config file you keep in your repo.
 
-- **Concurrent** — deploys multiple servers in parallel via async task groups, with a `--sequential` flag when you need ordering
-- **Declarative** — YAML configs define server specs, setup recipes (packages, Docker, Go, firewall, systemd services), and DNS settings
-- **Hands-off provisioning** — connects via SSH using your agent keys, streams setup output to your terminal, and logs everything to `/var/log/setup-<name>.log` on the server
+```bash
+harbor up      # create server, provision, deploy
+harbor deploy  # git pull, rebuild, restart
+harbor down    # tear it all down
+```
 
-## Quick start
+## Features
+
+- **Server orchestration** — `harbor up` creates a server, provisions it, and deploys your code. `harbor down` destroys the server and cleans up DNS. One command each way.
+- **Zero-downtime deploys** — `harbor deploy` SSHes into the server, pulls your repo, runs your build steps, and restarts services. Idempotent clone-or-pull.
+- **Provisioning from YAML** — packages, Docker, Go, Rust, Caddy, Fish shell, systemd services, firewall rules, SSH hardening, kernel hardening, swap, NTP, system users, directories, environment variables, file deployment — all declared in config.
+- **DNS automation** — creates Cloudflare A records automatically when a hostname is set. Cleans up on teardown.
+- **Fleet management** — `harbor env deploy` spins up multiple servers concurrently from a single config. `--sequential` flag when you need ordering.
+- **Live output** — streams SSH provisioning output to your terminal in real time and logs to `/var/log/setup-<name>.log` on the server.
+- **Operational shortcuts** — `harbor status`, `harbor ssh`, and `harbor logs [service]` for day-to-day server management without leaving the CLI.
+
+## Install
 
 ```bash
 cargo install --path crates/harbor-rs
-harbor init
 ```
 
-This scaffolds `~/.harbor/` with template configs:
+## Quick start
 
-```
-~/.harbor/
-├── config.yaml                  # Credentials (Hetzner, Cloudflare, GitHub)
-├── configs-deploy/
-│   ├── production.yaml          # Server fleet definitions
-│   ├── staging.yaml
-│   └── development.yaml
-└── configs-server/
-    └── server-profile.yaml      # Provisioning recipe
-```
-
-Edit `config.yaml` with your API tokens, then deploy:
+**1. Set up credentials**
 
 ```bash
-harbor env deploy configs-deploy/staging.yaml
+harbor init                      # scaffolds ~/.harbor/config.yaml
+nano ~/.harbor/config.yaml       # add your Hetzner token
 ```
 
-## Commands
-
-| Command | Description |
-|---|---|
-| `harbor init` | Scaffold `~/.harbor/` with template configs |
-| `harbor server create <name> --ssh-key <key>` | Create and provision a single server |
-| `harbor server delete <name>` | Delete a server and clean up DNS |
-| `harbor server list` | List running servers |
-| `harbor env deploy <config>` | Deploy a fleet from a deploy config |
-| `harbor env destroy <config>` | Tear down all servers in a deploy config |
-| `harbor generate <setup-config>` | Print the generated setup script without running it |
-| `harbor config list` | Show available deploy configurations |
-| `harbor completion <shell>` | Generate shell completions (bash, zsh, fish) |
-
-## Configuration
-
-### Credentials (`~/.harbor/config.yaml`)
+**2. Add a `harbor.yaml` to your project**
 
 ```yaml
-hetzner:
-  token: "your_hetzner_cloud_token"
+name: myapp
 
-cloudflare:
-  api_token: "your_cloudflare_api_token"
-  zone_id: "your_cloudflare_zone_id"
+server:
+  name: myapp-prod
+  type: cax11
+  location: nbg1
+  ssh_key: my-key
+  hostname: myapp           # optional: creates myapp.i.example.com
 
-dns:
-  base_domain: ".example.com"
-  provider: "cloudflare"
-
-github:
-  token: "your_github_token"  # For private repo access
-```
-
-The Hetzner token resolves through a fallback chain: deploy config → user config → `HCLOUD_TOKEN` env var.
-
-### Deploy config (`configs-deploy/*.yaml`)
-
-Defines which servers to create:
-
-```yaml
-hcloud:
-  ssh_key: "my-key"
-
-servers:
-  - name: "app-01"
-    type: "cax11"
-    location: "nbg1"
-    image: "ubuntu-24.04"
-  - name: "app-02"
-    type: "cax11"
-    location: "fsn1"
-    image: "ubuntu-24.04"
-```
-
-### Setup config (`configs-server/*.yaml`)
-
-Defines what gets installed on each server:
-
-```yaml
 setup:
-  packages: [ca-certificates, curl, git, jq]
-
+  packages: [ca-certificates, curl, git]
   components:
     docker:
       enabled: true
-    go:
-      enabled: true
-      version: "1.24.5"
-
-  security:
-    ufw:
-      enabled: true
-      allow_ports: [22, 50000]
-
   services:
-    - name: "myapp"
+    - name: myapp
       enabled: true
-      user: "myapp"
-      exec_start: "/usr/local/bin/myapp"
-      restart: "always"
+      exec_start: /usr/local/bin/myapp
+      restart: always
+  deploy:
+    repo: github.com/you/myapp
+    steps:
+      - make build
+      - sudo systemctl restart myapp
 ```
 
-The setup config also supports system users, directories, environment variables, PATH modifications, DNS settings, GitHub repo cloning, hostname configuration, and kernel updates.
+**3. Ship it**
 
-## How it works
-
-```
-YAML configs → validated config structs
-                     │
-    ┌────────────────┼────────────────┐
-    ▼                ▼                ▼
-CloudProvider   ScriptBuilder    DnsProvider
-(create server) (generate bash)  (create A record)
-    │                │
-    ▼                ▼
- Provisioner ◄── setup script
-(SSH + execute)
-    │
-    ▼
-Deployment Summary
+```bash
+harbor up       # server created, provisioned, deployed
+harbor deploy   # subsequent deploys — pull, build, restart
+harbor down     # done — server and DNS removed
 ```
 
-Each server goes through: create via Hetzner API → generate setup script from YAML → create DNS record via Cloudflare → connect over SSH → execute script with streamed output. In concurrent mode, all servers run this pipeline simultaneously.
+## Configuration
+
+Harbor uses two config files: **user config** for credentials (once per machine) and **project config** for what to build and deploy (per repo).
+
+### User config (`~/.harbor/config.yaml`)
+
+Created by `harbor init`. Stores API tokens — never committed to a repo.
+
+```yaml
+hetzner:
+  token: "..."
+cloudflare:           # optional — only needed for DNS
+  api_token: "..."
+  zone_id: "..."
+dns:
+  base_domain: ".i.example.com"
+github:
+  token: "..."        # optional — only needed for private repos
+```
+
+The Hetzner token resolves through a fallback chain: deploy config, user config, then `HCLOUD_TOKEN` env var.
+
+### Project config (`harbor.yaml`)
+
+Lives in your repo root. Discovered automatically by `harbor up/down/deploy/status/ssh/logs` by walking up from the current directory.
+
+See the [quick start](#quick-start) example above for the full structure. The `setup:` block supports:
+
+| Section | Examples |
+|---|---|
+| `packages` | apt packages to install |
+| `components` | docker, go, rust, caddy, fish, chrony-nts, fail2ban-rs, swap |
+| `security` | ufw firewall rules, ssh hardening, kernel hardening |
+| `services` | systemd units with restart policies |
+| `deploy` | repo URL + build/restart steps |
+| `github_repos` | clone, build, and install binaries from GitHub |
+| `system_user` | create a dedicated service user |
+| `directories` | create directories with ownership/permissions |
+| `files` | deploy config files from repo to server |
+| `environment` | environment variables |
+| `path` | PATH modifications (prepend, append, overwrite) |
+| `updates` | auto-upgrade, kernel updates, reboot policy |
 
 ## License
 

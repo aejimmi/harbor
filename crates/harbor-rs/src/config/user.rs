@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -61,10 +62,26 @@ fn default_provider() -> String {
 }
 
 /// GitHub credentials for private repository access.
+///
+/// Tokens are stored per project name (matching `name:` in harbor.yaml):
+/// ```yaml
+/// github:
+///   tokens:
+///     blissd: "github_pat_..."
+///     tell-platform: "github_pat_..."
+/// ```
 #[derive(Debug, Default, Deserialize)]
 pub struct GitHubCredentials {
+    /// Per-project fine-grained tokens.
     #[serde(default)]
-    pub token: String,
+    pub tokens: HashMap<String, String>,
+}
+
+impl GitHubCredentials {
+    /// Look up the token for a project. Returns empty string if not found.
+    pub fn token_for(&self, project: &str) -> &str {
+        self.tokens.get(project).map_or("", |t| t.as_str())
+    }
 }
 
 impl UserConfig {

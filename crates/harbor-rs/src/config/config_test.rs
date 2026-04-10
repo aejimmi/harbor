@@ -1,3 +1,5 @@
+#![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::panic)]
+
 use super::*;
 
 use std::fs;
@@ -19,7 +21,8 @@ dns:
   base_domain: ".example.com"
   provider: "cloudflare"
 github:
-  token: "gh-token-789"
+  tokens:
+    myproject: "gh-token-789"
 "#,
     )
     .expect("write");
@@ -30,7 +33,8 @@ github:
     assert_eq!(config.hetzner.token, "hz-token-456");
     assert_eq!(config.dns.base_domain, ".example.com");
     assert_eq!(config.dns.provider, "cloudflare");
-    assert_eq!(config.github.token, "gh-token-789");
+    assert_eq!(config.github.token_for("myproject"), "gh-token-789");
+    assert_eq!(config.github.token_for("unknown"), "");
 }
 
 #[test]
@@ -43,7 +47,7 @@ fn test_user_config_defaults() {
     assert_eq!(config.dns.base_domain, ".i.usercanal.com");
     assert_eq!(config.dns.provider, "cloudflare");
     assert!(config.cloudflare.api_token.is_empty());
-    assert!(config.github.token.is_empty());
+    assert!(config.github.tokens.is_empty());
 }
 
 #[test]

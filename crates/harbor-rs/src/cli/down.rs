@@ -28,21 +28,20 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
     let existing = provider.get_server(&server.name).await?;
     provider.delete_server(&server.name).await?;
 
-    if let Some(s) = &existing {
-        if let Some(ip) = s.ip {
-            provision::remove_from_known_hosts(ip);
-        }
+    if let Some(s) = &existing
+        && let Some(ip) = s.ip
+    {
+        provision::remove_from_known_hosts(ip);
     }
 
-    if dns::is_configured(&user_config) {
-        if let Some(ref h) = server.hostname {
-            let full = dns::full_hostname(h, &user_config.dns.base_domain);
-            if let Some(dns_provider) =
-                dns::cloudflare::CloudflareProvider::from_config(&user_config)?
-            {
-                output::info(&format!("Removing DNS: {full}"));
-                let _ = dns_provider.delete_a_record(&full).await;
-            }
+    if dns::is_configured(&user_config)
+        && let Some(ref h) = server.hostname
+    {
+        let full = dns::full_hostname(h, &user_config.dns.base_domain);
+        if let Some(dns_provider) = dns::cloudflare::CloudflareProvider::from_config(&user_config)?
+        {
+            output::info(&format!("Removing DNS: {full}"));
+            let _ = dns_provider.delete_a_record(&full).await;
         }
     }
 

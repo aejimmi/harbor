@@ -52,9 +52,12 @@ async fn create(action: ServerAction, config_path: Option<&Path>) -> Result<()> 
     };
     let setup_config = config::SetupConfig::load(&setup_path).context("loading setup config")?;
     let config_dir = setup_path.parent().unwrap_or(Path::new("."));
-    let setup_script =
-        ScriptBuilder::from_setup_config(&setup_config, &user_config.github.token, config_dir)
-            .build();
+    let setup_script = ScriptBuilder::from_setup_config(
+        &setup_config,
+        user_config.github.token_for(&setup_config.name),
+        config_dir,
+    )
+    .build();
 
     let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
     let spec = config::ServerSpec {
@@ -97,7 +100,7 @@ async fn create(action: ServerAction, config_path: Option<&Path>) -> Result<()> 
 
         let provisioner = Provisioner::new(debug, quiet);
         provisioner
-            .provision(ip, &name, &setup_script)
+            .provision(ip, &name, &setup_script, None)
             .await
             .context("provisioning server")?;
     }

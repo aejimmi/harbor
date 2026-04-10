@@ -27,6 +27,7 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
     output::info(&format!("Connecting to {} ({})", server.name, ip));
 
     let status = std::process::Command::new("ssh")
+        .args(["-o", "StrictHostKeyChecking=accept-new"])
         .arg(format!("root@{ip}"))
         .status()
         .context("failed to launch ssh")?;

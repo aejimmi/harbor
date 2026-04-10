@@ -6,10 +6,10 @@ use super::{discover, output};
 use crate::config::{self, UserConfig};
 use crate::dns::{self, DnsProvider};
 use crate::provider::CloudProvider;
-use crate::provision::Provisioner;
+use crate::provision::{Provisioner, Spinner};
 use crate::script::ScriptBuilder;
 
-pub async fn run(config_path: Option<&Path>) -> Result<()> {
+pub async fn run(debug: bool, config_path: Option<&Path>) -> Result<()> {
     let (setup_config, yaml_path) = discover::load_project_config()?;
     let server = setup_config
         .server
@@ -23,9 +23,12 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
     );
 
     let config_dir = yaml_path.parent().unwrap_or(Path::new("."));
-    let setup_script =
-        ScriptBuilder::from_setup_config(&setup_config, &user_config.github.token, config_dir)
-            .build();
+    let setup_script = ScriptBuilder::from_setup_config(
+        &setup_config,
+        user_config.github.token_for(&setup_config.name),
+        config_dir,
+    )
+    .build();
 
     let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
     let spec = config::ServerSpec {
@@ -35,37 +38,54 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
         image: server.image.clone(),
     };
 
-    output::header(&format!("Creating {}", server.name));
+    output::header(&server.name);
     output::info(&format!(
-        "Type: {}, Location: {}",
-        server.r#type, server.location
+        "{} · {} · {}",
+        server.r#type, server.location, spec.image
     ));
 
-    let created = provider
-        .create_server(&spec, &server.ssh_key)
-        .await
-        .context("creating server")?;
+    let spinner = Spinner::start("Creating server on Hetzner...", debug);
 
-    if let Some(ip) = created.ip {
-        if let Some(ref h) = server.hostname {
-            if dns::is_configured(&user_config) {
-                let full = dns::full_hostname(h, &user_config.dns.base_domain);
-                if let Some(dns_provider) =
-                    dns::cloudflare::CloudflareProvider::from_config(&user_config)?
-                {
-                    output::info(&format!("Creating DNS: {full} → {ip}"));
-                    dns_provider.upsert_a_record(&full, ip).await?;
-                }
+    let created = match provider.create_server(&spec, &server.ssh_key).await {
+        Ok(s) => s,
+        Err(e) => {
+            spinner.fail();
+            return Err(e).context("creating server");
+        }
+    };
+
+    let Some(ip) = created.ip else {
+        spinner.fail();
+        anyhow::bail!("server created but no IP assigned");
+    };
+
+    spinner.set_step(format!("Server ready at {ip}"));
+
+    if let Some(ref h) = server.hostname
+        && dns::is_configured(&user_config)
+    {
+        let full = dns::full_hostname(h, &user_config.dns.base_domain);
+        if let Some(dns_provider) = dns::cloudflare::CloudflareProvider::from_config(&user_config)?
+        {
+            spinner.set_step(format!("Creating DNS: {full} → {ip}"));
+            if let Err(e) = dns_provider.upsert_a_record(&full, ip).await {
+                spinner.fail();
+                return Err(e).context("creating DNS record");
             }
         }
-
-        let provisioner = Provisioner::new(false, false);
-        provisioner
-            .provision(ip, &server.name, &setup_script)
-            .await
-            .context("provisioning")?;
     }
 
-    output::success(&format!("{} is up", server.name));
+    spinner.set_step("Connecting via SSH...");
+
+    let provisioner = Provisioner::new(debug, false);
+    if let Err(e) = provisioner
+        .provision(ip, &server.name, &setup_script, Some(&spinner))
+        .await
+    {
+        spinner.fail();
+        return Err(e).context("provisioning");
+    }
+
+    spinner.success(format!("{} is up ({ip})", server.name));
     Ok(())
 }

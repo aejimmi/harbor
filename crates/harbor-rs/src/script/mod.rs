@@ -27,7 +27,7 @@ mod script_test;
 
 pub use caddy::CaddyComponent;
 pub use chrony_nts::ChronyNtsComponent;
-pub use deploy::DeployComponent;
+pub use deploy::{DeployComponent, RollbackComponent};
 pub use directories::DirectoriesComponent;
 pub use docker::DockerComponent;
 pub use env::EnvComponent;
@@ -83,6 +83,12 @@ impl ScriptBuilder {
         let mut lines = vec![
             "#!/bin/bash".to_owned(),
             "set -e".to_owned(),
+            String::new(),
+            "# Non-interactive apt — no dpkg config file prompts".to_owned(),
+            "export DEBIAN_FRONTEND=noninteractive".to_owned(),
+            "export APT_LISTCHANGES_FRONTEND=none".to_owned(),
+            r"APT_OPTS='-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef'"
+                .to_owned(),
             String::new(),
             "echo 'Starting server setup...'".to_owned(),
             String::new(),

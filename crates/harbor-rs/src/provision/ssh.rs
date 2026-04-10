@@ -11,7 +11,12 @@ use super::output::FilteredOutput;
 
 const MAX_ATTEMPTS: u32 = 30;
 const RETRY_DELAY: Duration = Duration::from_secs(10);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often to send SSH keepalive packets (prevents inactivity timeout
+/// during long silent operations like `cargo build --release`).
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Max missed keepalives before disconnecting. 10 × 30s = 5 minutes of truly
+/// dead network before giving up.
+const KEEPALIVE_MAX: usize = 10;
 
 /// SSH client handler that accepts any host key (for fresh servers).
 pub(crate) struct SshHandler;
@@ -40,7 +45,8 @@ pub async fn connect_with_retry(
     }
 
     let config = Arc::new(client::Config {
-        inactivity_timeout: Some(CONNECT_TIMEOUT),
+        keepalive_interval: Some(KEEPALIVE_INTERVAL),
+        keepalive_max: KEEPALIVE_MAX,
         ..Default::default()
     });
 
@@ -130,8 +136,9 @@ pub async fn execute_script(
     handle: client::Handle<SshHandler>,
     server_name: &str,
     script: &str,
+    spinner: Option<&super::Spinner>,
     debug: bool,
-    quiet: bool,
+    _quiet: bool,
 ) -> Result<(), ProvisionError> {
     let mut channel = handle
         .channel_open_session()
@@ -143,7 +150,7 @@ pub async fn execute_script(
         .await
         .map_err(|e| ProvisionError::Ssh(anyhow::anyhow!("exec: {e}")))?;
 
-    let mut output = FilteredOutput::new(server_name, !quiet, debug);
+    let mut output = FilteredOutput::new(server_name, spinner, debug);
 
     loop {
         match channel.wait().await {
@@ -151,7 +158,6 @@ pub async fn execute_script(
                 output.write_stdout(&data);
             }
             Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
-                // ext=1 is stderr
                 output.write_stderr(&data);
             }
             Some(ChannelMsg::ExitStatus { exit_status }) => {

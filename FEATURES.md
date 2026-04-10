@@ -17,28 +17,41 @@
 - Fleet destroy — tear down all servers defined in a deploy config.
 - Deployment summary — table showing each server's name, IP, status (success/failed), and duration.
 
+## Application Deployment
+
+- Deploy command — `harbor deploy` pulls the latest code, rebuilds, and restarts services on the configured server.
+- Rollback to previous — `harbor rollback` rewinds the running app to the prior deploy recorded in history.
+- Rollback to SHA — `harbor rollback <sha>` checks out a specific git SHA and re-runs the deploy steps.
+- Deploy lock — concurrent deploys are blocked by `~/.harbor/deploy.lock`; stale locks older than 30 minutes are auto-cleared.
+- Deploy history — every deploy and rollback is recorded to `~/.harbor/deploys.log` with timestamp, user, and SHA.
+- Health checks — after deploy and rollback, each started service is verified with `systemctl is-active`; failures dump recent journal logs and abort.
+- Exec command — `harbor exec -- <cmd>` runs a one-off command on the server over SSH.
+- Debug mode — `--debug` on `up`, `deploy`, and `rollback` streams raw remote output instead of the spinner.
+
 ## SSH Provisioning
 
 - Pure Rust SSH — connects to servers over SSH without shelling out to the `ssh` binary.
 - SSH agent authentication — uses your local ssh-agent keys, tries each key until one succeeds.
 - Connection retry — retries SSH connections up to 30 times with 10-second delays for freshly booted servers.
-- Streamed output — pipes remote stdout/stderr to your terminal in real time, prefixed with `[server-name]`.
-- Filtered output — shows command lines (`$`/`#` prefixed) by default, full verbose output with `--debug`.
+- SSH keepalive — sends keepalive every 30 seconds with 10 allowed misses, preventing timeouts during long silent builds.
+- Ticking spinner — live progress indicator with elapsed time that updates as the remote script emits status lines.
 - Server-side logging — setup output is tee'd to `/var/log/setup-<name>.log` on the remote server.
 - Known hosts cleanup — automatically removes server IPs from `~/.ssh/known_hosts` on deletion.
+- Accept new host keys — `ssh`, `exec`, `logs`, and `status` use `StrictHostKeyChecking=accept-new` to auto-trust fresh servers on first connection.
 
 ## Setup Script Generation
 
 - Declarative provisioning — generates bash setup scripts from YAML config instead of manual scripting.
+- Non-interactive apt — setup scripts run apt with `DEBIAN_FRONTEND=noninteractive` and `--force-confold`, so dpkg never prompts and existing config files are preserved.
 - Package installation — apt-get install of arbitrary package lists.
 - Docker installation — automated Docker CE setup from official repository.
 - Go installation — installs a specified Go version from the official tarball.
-- System user creation — creates system users with custom home, shell, and group.
+- System user creation — idempotent creation with custom home, shell, and group; fails loud if the user is missing afterwards.
 - Directory creation — creates directories with specified owner, group, and permissions.
 - Environment variables — exports variables to `/etc/environment`.
 - PATH configuration — prepend, append, or overwrite system PATH entries.
-- GitHub repo cloning — clones, builds, and installs Go binaries from GitHub repos with deploy key support.
-- Systemd services — generates and enables systemd unit files from config.
+- GitHub repo cloning — clones, builds, and installs Go binaries from GitHub repos using fine-grained tokens via `x-access-token` HTTPS auth.
+- Systemd services — generates, enables, and restarts systemd units so config changes apply on redeploy.
 - UFW firewall — enables UFW and opens specified ports.
 - System updates — optional unattended upgrades, kernel upgrades, and automatic reboot.
 - Hostname configuration — sets server hostname.
@@ -57,6 +70,7 @@
 
 - Init scaffolding — `harbor init` creates `~/.harbor/` with template configs for credentials, deploys, and server setup.
 - Credential config — centralized Hetzner, Cloudflare, and GitHub tokens in `~/.harbor/config.yaml`.
+- Per-project GitHub tokens — `github.tokens.<project-name>` maps fine-grained tokens to projects so each deploy uses the right credentials.
 - Token fallback chain — Hetzner token resolves from deploy config, then user config, then `HCLOUD_TOKEN` env var.
 - Deploy configs — YAML files defining server fleets (type, location, image per server).
 - Setup configs — YAML files defining the full provisioning recipe.
@@ -69,4 +83,7 @@
 - Colored output — styled terminal output with color-coded success, error, info, and header messages.
 - Quiet mode — `--quiet` flag suppresses non-essential output.
 - Debug mode — `--debug` flag shows verbose SSH output and internal diagnostics.
+- Status command — `harbor status` shows server type, location, IP, last deploy SHA, service health, uptime, and disk usage.
+- Logs command — `harbor logs [service]` streams journald logs from the server.
+- SSH shell — `harbor ssh` opens an interactive shell on the configured server.
 - Graceful interrupt — Ctrl+C triggers clean shutdown instead of abrupt termination.

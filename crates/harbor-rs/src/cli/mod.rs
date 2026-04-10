@@ -3,10 +3,13 @@ mod deploy_cmd;
 mod discover;
 mod down;
 mod env;
+mod exec_cmd;
 mod generate;
 mod init;
 mod logs_cmd;
 pub mod output;
+mod remote;
+mod rollback_cmd;
 mod server;
 mod ssh_cmd;
 mod status_cmd;
@@ -40,15 +43,36 @@ pub struct Cli {
 pub enum Commands {
     // --- Orchestration ---
     /// Create server, provision, and deploy.
-    Up,
+    Up {
+        #[arg(long)]
+        debug: bool,
+    },
 
     /// Destroy server.
     Down,
 
     /// Pull, rebuild, and restart.
-    Deploy,
+    Deploy {
+        #[arg(long)]
+        debug: bool,
+    },
 
-    /// Show server state.
+    /// Rollback to a previous version.
+    Rollback {
+        /// Git SHA to rollback to. Omit for previous version.
+        version: Option<String>,
+        #[arg(long)]
+        debug: bool,
+    },
+
+    /// Run a command on the server.
+    Exec {
+        /// Command and arguments to run.
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
+
+    /// Show server and app state.
     Status,
 
     /// Shell into server.
@@ -211,8 +235,10 @@ fn print_help() {
   \x1b[36mup\x1b[0m             Create server, provision, and deploy
   \x1b[36mdown\x1b[0m           Destroy server
   \x1b[36mdeploy\x1b[0m         Pull, rebuild, and restart
-  \x1b[36mstatus\x1b[0m         Show server state
+  \x1b[36mrollback\x1b[0m       Rollback to a previous version
+  \x1b[36mstatus\x1b[0m         Show server and app state
   \x1b[36mssh\x1b[0m            Shell into server
+  \x1b[36mexec\x1b[0m           Run a command on the server
   \x1b[36mlogs\x1b[0m           Stream service logs
 
 \x1b[2mInfrastructure:\x1b[0m
@@ -235,11 +261,15 @@ pub async fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    match cli.command.unwrap() {
+    match cli.command.expect("command is present after help check") {
         // Orchestration
-        Commands::Up => up::run(cli.config.as_deref()).await,
+        Commands::Up { debug } => up::run(debug, cli.config.as_deref()).await,
         Commands::Down => down::run(cli.config.as_deref()).await,
-        Commands::Deploy => deploy_cmd::run(cli.config.as_deref()).await,
+        Commands::Deploy { debug } => deploy_cmd::run(debug, cli.config.as_deref()).await,
+        Commands::Rollback { version, debug } => {
+            rollback_cmd::run(version, debug, cli.config.as_deref()).await
+        }
+        Commands::Exec { command } => exec_cmd::run(&command, cli.config.as_deref()).await,
         Commands::Status => status_cmd::run(cli.config.as_deref()).await,
         Commands::Ssh => ssh_cmd::run(cli.config.as_deref()).await,
         Commands::Logs { service } => {

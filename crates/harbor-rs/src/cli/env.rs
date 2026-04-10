@@ -63,9 +63,12 @@ async fn deploy(
     let setup_config =
         crate::config::SetupConfig::load(&setup_path).context("loading setup config")?;
     let config_dir = setup_path.parent().unwrap_or(std::path::Path::new("."));
-    let setup_script =
-        ScriptBuilder::from_setup_config(&setup_config, &user_config.github.token, config_dir)
-            .build();
+    let setup_script = ScriptBuilder::from_setup_config(
+        &setup_config,
+        user_config.github.token_for(&setup_config.name),
+        config_dir,
+    )
+    .build();
 
     let provider: Arc<dyn CloudProvider> = Arc::new(
         crate::provider::hetzner::HetznerProvider::new(&deploy_config.hcloud.token),
@@ -162,7 +165,7 @@ async fn deploy_single_server(spec: &ServerSpec, ctx: &DeployContext) -> Result<
         // Provision
         let provisioner = Provisioner::new(ctx.debug, ctx.quiet);
         provisioner
-            .provision(ip, &spec.name, &ctx.setup_script)
+            .provision(ip, &spec.name, &ctx.setup_script, None)
             .await?;
     }
 
