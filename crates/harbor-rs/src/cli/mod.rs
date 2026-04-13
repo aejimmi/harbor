@@ -2,8 +2,8 @@ mod config;
 mod deploy_cmd;
 mod discover;
 mod down;
-mod env;
 mod exec_cmd;
+mod fleet;
 mod generate;
 mod init;
 mod logs_cmd;
@@ -91,11 +91,11 @@ pub enum Commands {
         action: ServerAction,
     },
 
-    /// Manage server environments/deployments.
-    #[command(alias = "environment")]
-    Env {
+    /// Manage server fleets.
+    #[command(alias = "env")]
+    Fleet {
         #[command(subcommand)]
-        action: EnvAction,
+        action: FleetAction,
     },
 
     // --- Configuration ---
@@ -176,11 +176,14 @@ pub enum ServerAction {
 }
 
 #[derive(Debug, clap::Subcommand)]
-pub enum EnvAction {
-    /// Deploy servers from configuration file.
-    Deploy {
-        /// Deployment config file.
-        config_file: PathBuf,
+pub enum FleetAction {
+    /// Create and provision fleet servers.
+    Up {
+        /// Fleet name (e.g. staging, production).
+        name: String,
+        /// Fleet config file.
+        #[arg(short = 'f', long, default_value = "fleet.yaml")]
+        file: PathBuf,
         /// Run operations sequentially.
         #[arg(long)]
         sequential: bool,
@@ -190,18 +193,27 @@ pub enum EnvAction {
         quiet: bool,
     },
 
-    /// Destroy all servers from configuration.
-    Destroy {
-        /// Deployment config file.
-        config_file: PathBuf,
+    /// Destroy all fleet servers.
+    Down {
+        /// Fleet name.
+        name: String,
+        /// Fleet config file.
+        #[arg(short = 'f', long, default_value = "fleet.yaml")]
+        file: PathBuf,
         #[arg(long)]
         debug: bool,
         #[arg(long)]
         quiet: bool,
     },
 
-    /// List active deployments.
-    List,
+    /// Show fleet server status.
+    Status {
+        /// Fleet name.
+        name: String,
+        /// Fleet config file.
+        #[arg(short = 'f', long, default_value = "fleet.yaml")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -243,7 +255,7 @@ fn print_help() {
 
 \x1b[2mInfrastructure:\x1b[0m
   \x1b[36mserver\x1b[0m         Manage individual servers
-  \x1b[36menv\x1b[0m            Manage server environments
+  \x1b[36mfleet\x1b[0m          Manage server fleets
 
 \x1b[2mConfiguration:\x1b[0m
   \x1b[36minit\x1b[0m           Initialize harbor config
@@ -278,7 +290,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 
         // Infrastructure
         Commands::Server { action } => server::run(action, cli.config.as_deref()).await,
-        Commands::Env { action } => env::run(action, cli.config.as_deref()).await,
+        Commands::Fleet { action } => fleet::run(action, cli.config.as_deref()).await,
 
         // Configuration
         Commands::Init => init::run(),

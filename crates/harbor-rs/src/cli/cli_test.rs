@@ -195,58 +195,55 @@ fn test_cli_server_delete_parses() {
 }
 
 #[test]
-fn test_cli_env_deploy_parses() {
-    let cli = Cli::try_parse_from(["harbor", "env", "deploy", "production.yaml", "--sequential"])
-        .expect("parse env deploy");
+fn test_cli_fleet_up_parses() {
+    let cli = Cli::try_parse_from(["harbor", "fleet", "up", "staging", "--sequential"])
+        .expect("parse fleet up");
 
     match cli.command {
-        Some(Commands::Env {
-            action:
-                EnvAction::Deploy {
-                    config_file,
-                    sequential,
-                    ..
-                },
+        Some(Commands::Fleet {
+            action: FleetAction::Up {
+                name, sequential, ..
+            },
         }) => {
-            assert_eq!(config_file.to_str().expect("utf8"), "production.yaml");
+            assert_eq!(name, "staging");
             assert!(sequential);
         }
-        other => panic!("expected Env Deploy, got {other:?}"),
+        other => panic!("expected Fleet Up, got {other:?}"),
     }
 }
 
 #[test]
-fn test_cli_env_destroy_parses() {
+fn test_cli_fleet_down_parses() {
     let cli =
-        Cli::try_parse_from(["harbor", "env", "destroy", "prod.yaml"]).expect("parse env destroy");
+        Cli::try_parse_from(["harbor", "fleet", "down", "staging"]).expect("parse fleet down");
 
     assert!(matches!(
         cli.command,
-        Some(Commands::Env {
-            action: EnvAction::Destroy { .. }
+        Some(Commands::Fleet {
+            action: FleetAction::Down { .. }
         })
     ));
 }
 
 #[test]
-fn test_cli_env_list_parses() {
-    let cli = Cli::try_parse_from(["harbor", "env", "list"]).expect("parse env list");
+fn test_cli_fleet_status_parses() {
+    let cli =
+        Cli::try_parse_from(["harbor", "fleet", "status", "staging"]).expect("parse fleet status");
     assert!(matches!(
         cli.command,
-        Some(Commands::Env {
-            action: EnvAction::List
+        Some(Commands::Fleet {
+            action: FleetAction::Status { .. }
         })
     ));
 }
 
 #[test]
-fn test_cli_environment_alias_parses() {
-    let cli =
-        Cli::try_parse_from(["harbor", "environment", "list"]).expect("parse environment alias");
+fn test_cli_env_alias_parses() {
+    let cli = Cli::try_parse_from(["harbor", "env", "status", "staging"]).expect("parse env alias");
     assert!(matches!(
         cli.command,
-        Some(Commands::Env {
-            action: EnvAction::List
+        Some(Commands::Fleet {
+            action: FleetAction::Status { .. }
         })
     ));
 }

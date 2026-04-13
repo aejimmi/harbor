@@ -1,4 +1,5 @@
 mod deploy;
+mod fleet;
 mod paths;
 mod setup;
 mod templates;
@@ -6,8 +7,13 @@ mod user;
 
 #[cfg(test)]
 mod config_test;
+#[cfg(test)]
+mod fleet_test;
 
+#[allow(unused_imports)]
 pub use deploy::{DeployConfig, ServerSpec};
+#[allow(unused_imports)]
+pub use fleet::{FleetConfig, FleetServer, RoleSpec, expand_servers};
 pub use paths::{default_config_path, default_server_config_path, harbor_dir};
 pub use setup::{
     ContainerRuntime, DirectorySpec, GithubRepo, PathMode, ServiceSpec, SetupConfig, UfwRule,

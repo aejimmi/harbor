@@ -1,22 +1,17 @@
 # Harbor
 
-Go from `harbor.yaml` to a running server in one command. Harbor creates Hetzner Cloud servers, provisions them over SSH, wires up Cloudflare DNS, and deploys your code — all from a single config file you keep in your repo.
+Server orchestration for bare metal and cloud. Define your server, packages, services, and deploy steps in a single `harbor.yaml`, then run `harbor up` — Harbor creates the server, provisions it over SSH, wires up DNS, and deploys your code. For multi-server setups, a 4-line `fleet.yaml` composes role directories into named fleets that spin up concurrently. Written in Rust, single static binary, no agents on the server.
+
+- **One-command lifecycle** — `harbor up` creates, provisions, and deploys. `harbor down` destroys the server and cleans DNS. No intermediate steps, no state to manage.
+- **Declarative provisioning** — packages, Docker, Go, Rust, Caddy, systemd services, firewall rules, SSH hardening, file deployment, container services — all from YAML. Harbor generates and executes the setup script over SSH, no agent required.
+- **Fleet orchestration** — `harbor fleet up production` creates an entire fleet from role directories, each with its own `harbor.yaml`. Concurrent by default, idempotent, deterministic server naming.
 
 ```bash
-harbor up      # create server, provision, deploy
-harbor deploy  # git pull, rebuild, restart
-harbor down    # tear it all down
+harbor up                        # create server, provision, deploy
+harbor deploy                    # git pull, rebuild, restart
+harbor fleet up staging          # spin up a named fleet
+harbor down                      # tear it all down
 ```
-
-## Features
-
-- **Server orchestration** — `harbor up` creates a server, provisions it, and deploys your code. `harbor down` destroys the server and cleans up DNS. One command each way.
-- **Zero-downtime deploys** — `harbor deploy` SSHes into the server, pulls your repo, runs your build steps, and restarts services. Idempotent clone-or-pull.
-- **Provisioning from YAML** — packages, Docker, Go, Rust, Caddy, Fish shell, systemd services, firewall rules, SSH hardening, kernel hardening, swap, NTP, system users, directories, environment variables, file deployment — all declared in config.
-- **DNS automation** — creates Cloudflare A records automatically when a hostname is set. Cleans up on teardown.
-- **Fleet management** — `harbor env deploy` spins up multiple servers concurrently from a single config. `--sequential` flag when you need ordering.
-- **Live output** — streams SSH provisioning output to your terminal in real time and logs to `/var/log/setup-<name>.log` on the server.
-- **Operational shortcuts** — `harbor status`, `harbor ssh`, and `harbor logs [service]` for day-to-day server management without leaving the CLI.
 
 ## Install
 
@@ -70,6 +65,43 @@ harbor deploy   # subsequent deploys — pull, build, restart
 harbor down     # done — server and DNS removed
 ```
 
+## Fleet
+
+For multi-server setups, organize each service as a directory with its own `harbor.yaml` and `dist/` config files:
+
+```
+cloud/
+├── fleet.yaml
+├── clickhouse/
+│   ├── harbor.yaml
+│   └── dist/
+├── collectors/
+│   ├── harbor.yaml
+│   └── dist/
+└── platform/
+    ├── harbor.yaml
+    └── dist/
+```
+
+The `fleet.yaml` composes roles and counts:
+
+```yaml
+roles:
+  clickhouse: 1
+  collectors: 3
+  platform: 2
+```
+
+The fleet name is mandatory — it generates deterministic server names and identifies the fleet instance:
+
+```bash
+harbor fleet up staging          # creates clickhouse-staging-1, collectors-staging-{1,2,3}, platform-staging-{1,2}
+harbor fleet status staging      # table: name, role, status, IP, type, location
+harbor fleet down staging        # destroys all staging servers, cleans DNS
+```
+
+Same config, different fleets. `harbor fleet up production` creates a separate set of servers from the same role directories. Each role's `harbor.yaml` defines its server type, location, packages, services, and deploy steps — fleet just orchestrates.
+
 ## Configuration
 
 Harbor uses two config files: **user config** for credentials (once per machine) and **project config** for what to build and deploy (per repo).
@@ -90,28 +122,27 @@ github:
   token: "..."        # optional — only needed for private repos
 ```
 
-The Hetzner token resolves through a fallback chain: deploy config, user config, then `HCLOUD_TOKEN` env var.
+The Hetzner token resolves through a fallback chain: user config, then `HCLOUD_TOKEN` env var.
 
 ### Project config (`harbor.yaml`)
 
-Lives in your repo root. Discovered automatically by `harbor up/down/deploy/status/ssh/logs` by walking up from the current directory.
+Lives in your repo root. Discovered automatically by `harbor up/down/deploy/status/ssh/logs` by walking up from the current directory. See the [quick start](#quick-start) example for the structure.
 
-See the [quick start](#quick-start) example above for the full structure. The `setup:` block supports:
+## Commands
 
-| Section | Examples |
+| Command | What it does |
 |---|---|
-| `packages` | apt packages to install |
-| `components` | docker, go, rust, caddy, fish, chrony-nts, fail2ban-rs, swap |
-| `security` | ufw firewall rules, ssh hardening, kernel hardening |
-| `services` | systemd units with restart policies |
-| `deploy` | repo URL + build/restart steps |
-| `github_repos` | clone, build, and install binaries from GitHub |
-| `system_user` | create a dedicated service user |
-| `directories` | create directories with ownership/permissions |
-| `files` | deploy config files from repo to server |
-| `environment` | environment variables |
-| `path` | PATH modifications (prepend, append, overwrite) |
-| `updates` | auto-upgrade, kernel updates, reboot policy |
+| `harbor up` | Create server, provision, deploy |
+| `harbor down` | Destroy server, clean DNS |
+| `harbor deploy` | Pull, rebuild, restart services |
+| `harbor rollback [sha]` | Roll back to previous deploy or specific SHA |
+| `harbor status` | Server state, last deploy, service health, disk |
+| `harbor ssh` | Shell into the server |
+| `harbor exec -- <cmd>` | Run a one-off command on the server |
+| `harbor logs [service]` | Stream journald logs |
+| `harbor fleet up <name>` | Create and provision a named fleet |
+| `harbor fleet down <name>` | Destroy a named fleet |
+| `harbor fleet status <name>` | Show fleet server status |
 
 ## License
 

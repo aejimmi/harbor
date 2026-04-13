@@ -3,6 +3,17 @@
 ## v0.2.0
 
 New:
+- fleet: compose role directories into named server groups with fleet up, fleet down, and fleet status
+- fleet: mandatory fleet name generates deterministic server names as role-name-N
+- fleet: short form in fleet.yaml for roles (collectors: 3) and long form when directory name differs
+- fleet: fail-fast validation checks all role directories and harbor.yaml files before creating any servers
+- fleet: concurrent creation by default, sequential flag available
+
+Breaking:
+- cli: harbor env replaced by harbor fleet with new subcommands (up, down, status instead of deploy, destroy, list)
+- cli: harbor env still works as an alias during transition
+
+New:
 - services: run any Docker image as a managed service with ports, volumes, and env vars — Harbor handles pull, run, lifecycle, and logs
 - services: Podman Quadlet as an opt-in runtime for daemonless container execution, selected per service
 - services: container env vars stored in 0600 env files on the server instead of inline in world-readable unit files

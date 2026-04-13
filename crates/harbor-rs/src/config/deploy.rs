@@ -1,3 +1,6 @@
+// Legacy deploy config — replaced by FleetConfig. Kept for existing tests
+// and backward compatibility. Will be removed in a future release.
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -9,16 +12,17 @@ use super::ConfigError;
 ///
 /// Defines which servers to create and optional environment variables.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct DeployConfig {
     pub hcloud: HCloudSection,
     pub servers: Vec<ServerSpec>,
-    #[allow(dead_code)]
     #[serde(default)]
     pub environment: HashMap<String, String>,
 }
 
 /// Hetzner Cloud connection settings within a deploy config.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct HCloudSection {
     #[serde(default)]
     pub token: String,
@@ -35,6 +39,7 @@ pub struct ServerSpec {
     pub image: String,
 }
 
+#[allow(dead_code)]
 impl DeployConfig {
     /// Load a deployment config from a YAML file.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
