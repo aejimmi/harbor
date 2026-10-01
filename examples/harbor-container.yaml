@@ -1,0 +1,56 @@
+# Container service with nightly backups to S3-compatible storage.
+#
+# No build step — Harbor installs Docker, pulls the image, and runs it as a
+# systemd unit. Backup credentials live in ~/.harbor/config.yaml under
+# backup.projects.<name>, never in this file.
+#
+#   harbor up              create, provision, start the container
+#   harbor backup          run a backup now
+#   harbor backup list     list archives, newest first
+#   harbor restore         restore the newest archive (asks first)
+
+name: uptime
+
+server:
+  name: uptime-prod
+  type: cax11
+  location: fsn1
+  ssh_key: my-key
+  hostname: status
+
+setup:
+  components:
+    caddy: { enabled: true }
+
+  directories:
+    - { path: /srv/uptime, mode: "755" }
+
+  services:
+    - name: uptime-kuma
+      enabled: true
+      start: true
+      image: louislam/uptime-kuma:1
+      ports: ["127.0.0.1:3001:3001"]   # only Caddy reaches it
+      volumes: ["/srv/uptime:/app/data"]
+      env:
+        TZ: UTC
+      cap_drop: [ALL]
+      cap_add: [CHOWN, SETUID, SETGID]
+    - { name: caddy, enabled: true, start: true }
+
+  backup:
+    destination: s3://my-backups/uptime
+    endpoint: https://<account>.r2.cloudflarestorage.com
+    schedule: daily
+    retention_days: 14
+    stop_services: [uptime-kuma]     # stopped during tar for a consistent copy
+    paths: [/srv/uptime]
+
+  security:
+    ssh_hardening: true
+    ufw:
+      enabled: true
+      rules:
+        - { port: 22, proto: tcp, limit: true }
+        - { port: 80, proto: tcp }
+        - { port: 443, proto: tcp }

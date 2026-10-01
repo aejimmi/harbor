@@ -32,11 +32,20 @@ impl super::CloudProvider for HetznerProvider {
         spec: &ServerSpec,
         ssh_key: &str,
     ) -> Result<Server, ProviderError> {
-        // Check if server already exists
-        if let Some(existing) = self.get_server(&spec.name).await?
-            && existing.status == ServerStatus::Running
-        {
-            return Ok(existing);
+        // Reuse an existing server of the same name instead of letting the
+        // API reject a duplicate. A booting one is waited for; any other
+        // state needs the user to act.
+        if let Some(existing) = self.get_server(&spec.name).await? {
+            return match existing.status {
+                ServerStatus::Running => Ok(existing),
+                ServerStatus::Initializing | ServerStatus::Starting => {
+                    self.wait_for_running(existing.id, &spec.name).await
+                }
+                status => Err(ProviderError::Api(anyhow::anyhow!(
+                    "server '{}' already exists in state {status:?} — start or delete it first",
+                    spec.name
+                ))),
+            };
         }
 
         // Look up SSH key by name to validate it exists

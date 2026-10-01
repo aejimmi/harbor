@@ -62,21 +62,7 @@ pub struct FleetServer {
 impl FleetConfig {
     /// Load a fleet config from a YAML file.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        if !path.exists() {
-            return Err(ConfigError::NotFound {
-                path: path.display().to_string(),
-            });
-        }
-
-        let data = std::fs::read_to_string(path).map_err(|e| ConfigError::ReadFailed {
-            path: path.display().to_string(),
-            source: e,
-        })?;
-
-        serde_yaml::from_str(&data).map_err(|e| ConfigError::ParseFailed {
-            path: path.display().to_string(),
-            source: e,
-        })
+        super::paths::load_yaml(path)
     }
 
     /// Validate the fleet config against the filesystem.

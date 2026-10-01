@@ -1,3 +1,4 @@
+mod backup;
 mod caddy;
 mod chrony_nts;
 mod deploy;
@@ -8,13 +9,15 @@ mod fail2ban_rs;
 mod files;
 mod fish;
 mod git_auth;
-mod github_repos;
 mod golang;
 mod hostname;
 mod kernel_hardening;
+mod mount_hardening;
 mod packages;
 mod path;
 mod podman;
+mod rc_install;
+mod rclone_install;
 mod rust_lang;
 mod services;
 mod ssh_hardening;
@@ -24,8 +27,32 @@ mod updates;
 mod user;
 
 #[cfg(test)]
-mod script_test;
+mod script_backup_test;
+#[cfg(test)]
+mod script_backup_units_test;
+#[cfg(test)]
+mod script_backup_wiring_test;
+#[cfg(test)]
+mod script_builder_test;
+#[cfg(test)]
+mod script_components_test;
+#[cfg(test)]
+mod script_deploy_test;
+#[cfg(test)]
+mod script_install_test;
+#[cfg(test)]
+mod script_services_docker_test;
+#[cfg(test)]
+mod script_services_gap_test;
+#[cfg(test)]
+mod script_services_podman_test;
+#[cfg(test)]
+mod script_services_security_test;
+#[cfg(test)]
+mod script_test_helpers;
 
+#[allow(unused_imports)] // wired into from_setup_config by spec 014
+pub use backup::BackupComponent;
 pub use caddy::CaddyComponent;
 pub use chrony_nts::ChronyNtsComponent;
 pub use deploy::{DeployComponent, RollbackComponent};
@@ -36,13 +63,17 @@ pub use fail2ban_rs::Fail2banRsComponent;
 pub use files::{FilesComponent, ResolvedFile};
 pub use fish::FishComponent;
 pub use git_auth::GitAuthComponent;
-pub use github_repos::GithubReposComponent;
 pub use golang::GoComponent;
 pub use hostname::HostnameComponent;
 pub use kernel_hardening::KernelHardeningComponent;
+pub use mount_hardening::MountHardeningComponent;
 pub use packages::PackagesComponent;
 pub use path::PathComponent;
 pub use podman::PodmanComponent;
+#[allow(unused_imports)] // wired into from_setup_config by spec 014
+pub use rc_install::RcInstallComponent;
+#[allow(unused_imports)] // wired into from_setup_config by spec 014
+pub use rclone_install::RcloneInstallComponent;
 pub use rust_lang::RustComponent;
 pub use services::ServicesComponent;
 pub use ssh_hardening::SshHardeningComponent;
@@ -53,9 +84,10 @@ pub use user::SystemUserComponent;
 
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result};
 
-use crate::config::{ContainerRuntime, SetupConfig};
+use crate::config::setup::SetupSection;
+use crate::config::{BackupCredentials, BackupTransport, ContainerRuntime, SetupConfig};
 
 /// Sentinel prefix for harbor status lines. Emitted by `status_echo` and
 /// parsed by `provision::output` to drive the spinner. Lets harbor's own
@@ -66,6 +98,30 @@ pub(crate) const STATUS_SENTINEL: &str = "::step::";
 /// stripped by the output filter before it reaches the user.
 pub(crate) fn status_echo(msg: &str) -> String {
     format!("echo '{STATUS_SENTINEL} {msg}'")
+}
+
+/// Quote `s` as a single bash word: wrap in `'…'`, escaping embedded
+/// single quotes as `'\''`.
+pub(crate) fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Go version installed when `components.go.version` is empty.
+const DEFAULT_GO_VERSION: &str = "1.24.5";
+
+/// Container hardening fields are silently ignored on native services;
+/// say so instead of letting users believe they apply.
+fn warn_ignored_container_fields(setup: &SetupSection) {
+    for svc in &setup.services {
+        if svc.image.is_none()
+            && (!svc.cap_drop.is_empty() || !svc.cap_add.is_empty() || svc.read_only)
+        {
+            tracing::warn!(
+                service = svc.name,
+                "cap_drop/cap_add/read_only are ignored on native services (no image)"
+            );
+        }
+    }
 }
 
 /// A component that can render bash script lines.
@@ -97,7 +153,12 @@ impl ScriptBuilder {
     pub fn build(&self) -> String {
         let mut lines = vec![
             "#!/bin/bash".to_owned(),
-            "set -e".to_owned(),
+            // `pipefail` is load-bearing: without it, a failure in
+            // any command except the last of a pipe (e.g. `curl |
+            // gpg --dearmor`) is silently swallowed, and `set -e`
+            // doesn't fire. The setup script then marches past the
+            // failure and harbor reports success on a broken box.
+            "set -eo pipefail".to_owned(),
             String::new(),
             "# Non-interactive apt — no dpkg config file prompts".to_owned(),
             "export DEBIAN_FRONTEND=noninteractive".to_owned(),
@@ -138,226 +199,220 @@ impl ScriptBuilder {
         config: &SetupConfig,
         github_token: &str,
         config_dir: &Path,
+        backup_creds: Option<&BackupCredentials>,
     ) -> Result<Self> {
+        // Validate here too, so no entry point renders an unvalidated config.
+        config.validate()?;
         let setup = &config.setup;
-
-        // Reject services that mix native (`exec_start`) and container
-        // (`image`) modes — they are mutually exclusive. Also reject
-        // empty-string images, which would render a broken `docker run`
-        // with no image token.
-        for svc in &setup.services {
-            if svc.image.is_some() && !svc.exec_start.is_empty() {
-                bail!(
-                    "service `{}`: `image` and `exec_start` are mutually exclusive. Remove one.",
-                    svc.name
-                );
-            }
-            if let Some(image) = &svc.image
-                && image.trim().is_empty()
-            {
-                bail!("service `{}`: `image` must not be empty.", svc.name);
-            }
-        }
-
-        let needs_docker_runtime = setup
-            .services
-            .iter()
-            .any(|s| s.image.is_some() && matches!(s.runtime, ContainerRuntime::Docker));
-        let needs_podman_runtime = setup
-            .services
-            .iter()
-            .any(|s| s.image.is_some() && matches!(s.runtime, ContainerRuntime::Podman));
+        warn_ignored_container_fields(setup);
 
         let mut builder = Self::new();
+        builder.add_base(setup, github_token);
+        builder.add_system(setup);
+        builder.add_files(setup, config_dir)?;
+        builder.add_security(setup);
+        builder.add_infra(setup);
+        builder.add_backup(config, backup_creds)?;
+        builder.add_runtime(setup);
+        Ok(builder)
+    }
 
-        // --- Components that add apt repos (before packages) ---
-
+    /// Apt-repo components, packages, toolchains, and git auth — in that
+    /// order, since components that add apt repos must precede packages.
+    fn add_base(&mut self, setup: &SetupSection, github_token: &str) {
         if setup.components.fish.enabled {
-            builder.add(FishComponent);
+            self.add(FishComponent);
         }
-
         if setup.components.caddy.enabled {
-            builder.add(CaddyComponent);
+            self.add(CaddyComponent);
         }
-
-        // --- Packages ---
-
         if !setup.packages.is_empty() {
-            builder.add(PackagesComponent {
+            self.add(PackagesComponent {
                 packages: setup.packages.clone(),
             });
         }
-
-        // --- Language toolchains ---
-
         if setup.components.go.enabled {
             let version = if setup.components.go.version.is_empty() {
-                "1.24.5".to_owned()
+                DEFAULT_GO_VERSION.to_owned()
             } else {
                 setup.components.go.version.clone()
             };
-            builder.add(GoComponent { version });
+            self.add(GoComponent { version });
         }
-
         if setup.components.rust.enabled {
-            builder.add(RustComponent);
+            self.add(RustComponent);
         }
-
-        // --- Git HTTPS auth ---
-
         if !github_token.is_empty() {
-            builder.add(GitAuthComponent {
+            self.add(GitAuthComponent {
                 token: github_token.to_owned(),
             });
         }
+    }
 
-        // --- System configuration ---
-
+    /// PATH, environment, system user, directories, container runtimes,
+    /// and timezone.
+    fn add_system(&mut self, setup: &SetupSection) {
         if !setup.path.paths.is_empty() {
-            builder.add(PathComponent {
+            self.add(PathComponent {
                 mode: setup.path.mode,
                 paths: setup.path.paths.clone(),
             });
         }
-
         if !setup.environment.is_empty() {
-            builder.add(EnvComponent {
+            self.add(EnvComponent {
                 vars: setup.environment.clone(),
             });
         }
-
         if !setup.system_user.name.is_empty() {
-            builder.add(SystemUserComponent {
+            self.add(SystemUserComponent {
                 name: setup.system_user.name.clone(),
                 home: setup.system_user.home.clone(),
                 shell: setup.system_user.shell.clone(),
             });
         }
-
         if !setup.directories.is_empty() {
-            builder.add(DirectoriesComponent {
+            self.add(DirectoriesComponent {
                 dirs: setup.directories.clone(),
             });
         }
-
-        if setup.components.docker.enabled || needs_docker_runtime {
-            builder.add(DockerComponent);
-        }
-
-        if needs_podman_runtime {
-            builder.add(PodmanComponent);
-        }
-
-        if !setup.github_repos.is_empty() {
-            builder.add(GithubReposComponent {
-                repos: setup.github_repos.clone(),
-                github_token: github_token.to_owned(),
-                system_user: if setup.system_user.name.is_empty() {
-                    None
-                } else {
-                    Some(setup.system_user.name.clone())
-                },
-            });
-        }
-
+        self.add_container_runtimes(setup);
         if !setup.system.timezone.is_empty() {
-            builder.add(hostname::TimezoneComponent {
+            self.add(hostname::TimezoneComponent {
                 timezone: setup.system.timezone.clone(),
             });
         }
+    }
 
-        // --- Files (deploy config files before services) ---
-
-        if !setup.files.is_empty() {
-            let resolved: Vec<ResolvedFile> = setup
-                .files
+    /// Docker when enabled or any service runs a Docker image; Podman when
+    /// any service selects it.
+    fn add_container_runtimes(&mut self, setup: &SetupSection) {
+        let uses = |runtime: ContainerRuntime| {
+            setup
+                .services
                 .iter()
-                .filter_map(|f| {
-                    let source_path = config_dir.join(&f.source);
-                    match std::fs::read_to_string(&source_path) {
-                        Ok(content) => Some(ResolvedFile {
-                            target: f.target.clone(),
-                            content,
-                            owner: f.owner.clone(),
-                            group: f.group.clone(),
-                            mode: f.mode.clone(),
-                        }),
-                        Err(e) => {
-                            eprintln!(
-                                "Warning: could not read file {}: {e}",
-                                source_path.display()
-                            );
-                            None
-                        }
-                    }
+                .any(|s| s.image.is_some() && s.runtime == runtime)
+        };
+        if setup.components.docker.enabled || uses(ContainerRuntime::Docker) {
+            self.add(DockerComponent);
+        }
+        if uses(ContainerRuntime::Podman) {
+            self.add(PodmanComponent);
+        }
+    }
+
+    /// Config files, deployed before services. A missing source is an
+    /// error: provisioning without it would report success on a server
+    /// missing its config.
+    fn add_files(&mut self, setup: &SetupSection, config_dir: &Path) -> Result<()> {
+        if setup.files.is_empty() {
+            return Ok(());
+        }
+        let files = setup
+            .files
+            .iter()
+            .map(|f| {
+                let source_path = config_dir.join(&f.source);
+                let content = std::fs::read_to_string(&source_path)
+                    .with_context(|| format!("reading files: source {}", source_path.display()))?;
+                Ok(ResolvedFile {
+                    target: f.target.clone(),
+                    content,
+                    owner: f.owner.clone(),
+                    group: f.group.clone(),
+                    mode: f.mode.clone(),
                 })
-                .collect();
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.add(FilesComponent { files });
+        Ok(())
+    }
 
-            if !resolved.is_empty() {
-                builder.add(FilesComponent { files: resolved });
-            }
+    /// SSH, kernel, and mount hardening, then the firewall.
+    fn add_security(&mut self, setup: &SetupSection) {
+        let security = &setup.security;
+        if security.ssh_hardening {
+            self.add(SshHardeningComponent);
         }
-
-        // --- Security ---
-
-        if setup.security.ssh_hardening {
-            builder.add(SshHardeningComponent);
+        if security.kernel_hardening {
+            self.add(KernelHardeningComponent);
         }
-
-        if setup.security.kernel_hardening {
-            builder.add(KernelHardeningComponent);
+        if security.mount_hardening {
+            self.add(MountHardeningComponent);
         }
-
-        if setup.security.ufw.enabled {
-            builder.add(UfwComponent::from_config(
-                &setup.security.ufw.allow_ports,
-                &setup.security.ufw.rules,
+        if security.ufw.enabled {
+            self.add(UfwComponent::from_config(
+                &security.ufw.allow_ports,
+                &security.ufw.rules,
             ));
         }
+    }
 
-        // --- Infrastructure components ---
-
+    /// Time sync and intrusion prevention.
+    fn add_infra(&mut self, setup: &SetupSection) {
         if setup.components.chrony_nts.enabled {
-            builder.add(ChronyNtsComponent);
+            self.add(ChronyNtsComponent);
         }
-
         if setup.components.fail2ban_rs.enabled {
-            builder.add(Fail2banRsComponent);
+            self.add(Fail2banRsComponent);
         }
+    }
 
+    /// Backup transport install, then the backup component, so the
+    /// rendered scripts can rely on `rc`/`rclone` existing by the time
+    /// the timer first fires.
+    fn add_backup(
+        &mut self,
+        config: &SetupConfig,
+        backup_creds: Option<&BackupCredentials>,
+    ) -> Result<()> {
+        let Some(backup) = &config.setup.backup else {
+            return Ok(());
+        };
+        let creds = backup_creds.ok_or_else(|| {
+            anyhow::anyhow!(
+                "backup: is declared but user config has no backup.projects.{} — \
+                 add credentials to ~/.harbor/config.yaml",
+                config.name
+            )
+        })?;
+        match backup.transport {
+            BackupTransport::Rc => self.add(RcInstallComponent),
+            BackupTransport::Rclone => self.add(RcloneInstallComponent),
+        };
+        self.add(BackupComponent {
+            project: config.name.clone(),
+            transport: backup.transport,
+            destination: backup.destination.clone(),
+            endpoint: backup.endpoint.clone(),
+            schedule: backup.schedule,
+            retention_days: backup.retention_days,
+            stop_services: backup.stop_services.clone(),
+            paths: backup.paths.clone(),
+            access_key_id: creds.access_key_id.clone(),
+            secret_access_key: creds.secret_access_key.clone(),
+        });
+        Ok(())
+    }
+
+    /// Swap, services, and finally OS updates. Named `deploys:` are not
+    /// run here — `harbor deploy` drives them after `up`.
+    fn add_runtime(&mut self, setup: &SetupSection) {
         if !setup.components.swap.size.is_empty() {
-            builder.add(SwapComponent {
+            self.add(SwapComponent {
                 size: setup.components.swap.size.clone(),
             });
         }
-
-        // --- Deploy (clone + build + install) ---
-
-        if let Some(ref deploy) = setup.deploy {
-            builder.add(DeployComponent {
-                repo: deploy.repo.clone(),
-                steps: deploy.steps.clone(),
-            });
-        }
-
-        // --- Services ---
-
         if !setup.services.is_empty() {
-            builder.add(ServicesComponent {
+            self.add(ServicesComponent {
                 services: setup.services.clone(),
             });
         }
-
-        // --- Updates (last) ---
-
         if setup.updates.auto_upgrade {
-            builder.add(UpdatesComponent {
+            self.add(UpdatesComponent {
                 auto_upgrade: setup.updates.auto_upgrade,
                 upgrade_kernel: setup.updates.upgrade_kernel,
                 reboot_after_kernel: setup.updates.reboot_after_kernel,
             });
         }
-
-        Ok(builder)
     }
 }

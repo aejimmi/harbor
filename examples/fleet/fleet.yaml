@@ -1,0 +1,11 @@
+# Fleet: each role is a directory holding its own harbor.yaml.
+#
+#   harbor fleet up staging      creates web-staging-1, web-staging-2, worker-staging-1
+#   harbor fleet status staging
+#   harbor fleet down staging
+#
+# Same directory, different fleet name = a separate set of servers.
+
+roles:
+  web: 2
+  worker: 1

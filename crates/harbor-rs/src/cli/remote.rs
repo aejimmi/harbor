@@ -1,13 +1,16 @@
 //! Shared helpers for commands that operate on a remote server.
 
+use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
+use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result};
 
 use super::discover;
 use crate::config::{SetupConfig, UserConfig};
 use crate::provider::CloudProvider;
+use crate::provider::hetzner::HetznerProvider;
 
 /// Resolved server: config + IP + name.
 pub struct ResolvedServer {
@@ -25,7 +28,7 @@ pub async fn resolve_server(config_path: Option<&Path>) -> Result<ResolvedServer
         .ok_or_else(|| anyhow::anyhow!("no 'server:' section in harbor.yaml"))?;
 
     let user_config = UserConfig::load(config_path).context("loading user config")?;
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
+    let provider = hetzner_provider(&user_config)?;
 
     let existing = provider.get_server(&server.name).await?.ok_or_else(|| {
         anyhow::anyhow!("server '{}' not found — run `harbor up` first", server.name)
@@ -40,6 +43,20 @@ pub async fn resolve_server(config_path: Option<&Path>) -> Result<ResolvedServer
         ip,
         name,
     })
+}
+
+/// Hetzner provider from the user config token, falling back to the
+/// `HCLOUD_TOKEN` env var. Fails up front instead of with an API 401.
+pub fn hetzner_provider(user_config: &UserConfig) -> Result<HetznerProvider> {
+    if !user_config.hetzner.token.is_empty() {
+        return Ok(HetznerProvider::new(&user_config.hetzner.token));
+    }
+    match std::env::var("HCLOUD_TOKEN") {
+        Ok(token) if !token.is_empty() => Ok(HetznerProvider::new(&token)),
+        _ => anyhow::bail!(
+            "no Hetzner token — set hetzner.token in ~/.harbor/config.yaml or HCLOUD_TOKEN"
+        ),
+    }
 }
 
 /// Generate the bash preamble that acquires a deploy lock with stale detection.
@@ -93,13 +110,63 @@ pub fn health_check_lines(services: &[&str]) -> Vec<String> {
     lines
 }
 
-/// Collect service names that have `start: true` in config.
-pub fn started_services(config: &SetupConfig) -> Vec<String> {
-    config
-        .setup
-        .services
-        .iter()
-        .filter(|s| s.start)
-        .map(|s| s.name.clone())
-        .collect()
+/// Path to harbor's known_hosts file as a string, for passing to the
+/// `ssh` binary via `-o UserKnownHostsFile=`.
+pub fn harbor_known_hosts_path() -> String {
+    crate::config::harbor_dir().map_or_else(
+        |_| "~/.harbor/known_hosts".to_owned(),
+        |d| d.join("known_hosts").to_string_lossy().into_owned(),
+    )
+}
+
+/// Base `ssh root@<ip>` command with harbor's host-key pinning options.
+/// Callers append the remote command (if any) and choose stdio.
+pub fn ssh_command(ip: IpAddr) -> Command {
+    let mut cmd = Command::new("ssh");
+    cmd.args([
+        "-o",
+        &format!("UserKnownHostsFile={}", harbor_known_hosts_path()),
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "HashKnownHosts=no",
+        "-o",
+        "ConnectTimeout=5",
+        &format!("root@{ip}"),
+    ]);
+    cmd
+}
+
+/// Run a bash script on a remote host via the system `ssh` binary.
+///
+/// Always invokes `bash -s` remotely and pipes the script to its
+/// stdin — bypassing the remote user's login shell. Without this,
+/// a root user with fish or zsh as their login shell breaks on the
+/// bash-only syntax harbor renders (process substitution, heredocs,
+/// `${var:+...}` expansion). Mirrors the fix in `provision/ssh.rs`
+/// for the russh path; every ssh-based command in the CLI should
+/// go through this helper.
+///
+/// Stdin is written from a separate thread while output is drained,
+/// so a chatty remote can't deadlock against a full pipe buffer.
+pub fn ssh_exec_script(ip: IpAddr, script: &str) -> std::io::Result<Output> {
+    let mut child = ssh_command(ip)
+        .arg("bash -s")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let stdin = child.stdin.take();
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(move || match stdin {
+            Some(mut stdin) => stdin.write_all(script.as_bytes()),
+            None => Ok(()),
+        });
+        let output = child.wait_with_output()?;
+        writer
+            .join()
+            .map_err(|_| std::io::Error::other("ssh stdin writer panicked"))??;
+        Ok(output)
+    })
 }

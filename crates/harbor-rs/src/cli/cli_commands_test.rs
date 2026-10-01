@@ -34,12 +34,60 @@ fn test_cli_down_parses() {
 }
 
 #[test]
-fn test_cli_deploy_parses() {
-    let cli = Cli::try_parse_from(["harbor", "deploy"]).expect("parse deploy");
-    assert!(matches!(
-        cli.command,
-        Some(Commands::Deploy { debug: false })
-    ));
+fn test_cli_deploy_with_name_parses() {
+    let cli = Cli::try_parse_from(["harbor", "deploy", "web"]).expect("parse deploy web");
+    match cli.command {
+        Some(Commands::Deploy { name, all, debug }) => {
+            assert_eq!(name.as_deref(), Some("web"));
+            assert!(!all);
+            assert!(!debug);
+        }
+        other => panic!("expected Deploy, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cli_deploy_all_flag_parses() {
+    let cli = Cli::try_parse_from(["harbor", "deploy", "--all"]).expect("parse deploy --all");
+    match cli.command {
+        Some(Commands::Deploy { name, all, .. }) => {
+            assert!(name.is_none());
+            assert!(all);
+        }
+        other => panic!("expected Deploy, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cli_deploy_debug_with_name_parses() {
+    let cli = Cli::try_parse_from(["harbor", "deploy", "api", "--debug"])
+        .expect("parse deploy api --debug");
+    match cli.command {
+        Some(Commands::Deploy { name, debug, .. }) => {
+            assert_eq!(name.as_deref(), Some("api"));
+            assert!(debug);
+        }
+        other => panic!("expected Deploy, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cli_deploy_without_name_or_all_errors() {
+    // Neither a name nor --all is supplied — clap ArgGroup enforces one.
+    let result = Cli::try_parse_from(["harbor", "deploy"]);
+    assert!(
+        result.is_err(),
+        "deploy with no name and no --all must error"
+    );
+}
+
+#[test]
+fn test_cli_deploy_name_and_all_conflict_errors() {
+    let result = Cli::try_parse_from(["harbor", "deploy", "web", "--all"]);
+    assert!(
+        result.is_err(),
+        "deploy with both <name> and --all must error"
+    );
 }
 
 #[test]
@@ -98,13 +146,13 @@ fn test_cli_server_create_parses() {
     match cli.command {
         Some(Commands::Server {
             action:
-                ServerAction::Create {
+                ServerAction::Create(CreateArgs {
                     name,
                     ssh_key,
                     r#type,
                     location,
                     ..
-                },
+                }),
         }) => {
             assert_eq!(name, "myserver");
             assert_eq!(ssh_key, "mykey");
@@ -131,7 +179,7 @@ fn test_cli_server_create_with_all_flags() {
         "--image",
         "debian-12",
         "--hostname",
-        "tergar",
+        "myapp",
         "--debug",
         "--quiet",
     ])
@@ -140,7 +188,7 @@ fn test_cli_server_create_with_all_flags() {
     match cli.command {
         Some(Commands::Server {
             action:
-                ServerAction::Create {
+                ServerAction::Create(CreateArgs {
                     name,
                     ssh_key,
                     r#type,
@@ -150,14 +198,14 @@ fn test_cli_server_create_with_all_flags() {
                     debug,
                     quiet,
                     ..
-                },
+                }),
         }) => {
             assert_eq!(name, "myserver");
             assert_eq!(ssh_key, "mykey");
             assert_eq!(r#type, "cpx31");
             assert_eq!(location, "fsn1");
             assert_eq!(image, "debian-12");
-            assert_eq!(hostname.as_deref(), Some("tergar"));
+            assert_eq!(hostname.as_deref(), Some("myapp"));
             assert!(debug);
             assert!(quiet);
         }
@@ -179,7 +227,7 @@ fn test_cli_server_delete_parses() {
         "delete",
         "myserver",
         "--hostname",
-        "tergar",
+        "myapp",
     ])
     .expect("parse server delete");
 
@@ -188,7 +236,7 @@ fn test_cli_server_delete_parses() {
             action: ServerAction::Delete { name, hostname, .. },
         }) => {
             assert_eq!(name, "myserver");
-            assert_eq!(hostname.as_deref(), Some("tergar"));
+            assert_eq!(hostname.as_deref(), Some("myapp"));
         }
         other => panic!("expected Server Delete, got {other:?}"),
     }
@@ -311,68 +359,5 @@ fn test_cli_no_args_shows_help() {
 #[test]
 fn test_cli_unknown_command_errors() {
     let result = Cli::try_parse_from(["harbor", "nonexistent"]);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_cli_rollback_parses_no_version() {
-    let cli = Cli::try_parse_from(["harbor", "rollback"]).expect("parse rollback");
-    match cli.command {
-        Some(Commands::Rollback { version, debug, .. }) => {
-            assert!(version.is_none());
-            assert!(!debug);
-        }
-        other => panic!("expected Rollback, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_cli_rollback_parses_with_version() {
-    let cli =
-        Cli::try_parse_from(["harbor", "rollback", "abc123f"]).expect("parse rollback version");
-    match cli.command {
-        Some(Commands::Rollback { version, .. }) => {
-            assert_eq!(version.as_deref(), Some("abc123f"));
-        }
-        other => panic!("expected Rollback, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_cli_rollback_debug_parses() {
-    let cli =
-        Cli::try_parse_from(["harbor", "rollback", "--debug"]).expect("parse rollback --debug");
-    match cli.command {
-        Some(Commands::Rollback { debug, .. }) => assert!(debug),
-        other => panic!("expected Rollback, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_cli_exec_parses() {
-    let cli = Cli::try_parse_from(["harbor", "exec", "systemctl", "restart", "blissd"])
-        .expect("parse exec");
-    match cli.command {
-        Some(Commands::Exec { command }) => {
-            assert_eq!(command, vec!["systemctl", "restart", "blissd"]);
-        }
-        other => panic!("expected Exec, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_cli_exec_single_arg_parses() {
-    let cli = Cli::try_parse_from(["harbor", "exec", "uptime"]).expect("parse exec uptime");
-    match cli.command {
-        Some(Commands::Exec { command }) => {
-            assert_eq!(command, vec!["uptime"]);
-        }
-        other => panic!("expected Exec, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_cli_exec_requires_command() {
-    let result = Cli::try_parse_from(["harbor", "exec"]);
     assert!(result.is_err());
 }

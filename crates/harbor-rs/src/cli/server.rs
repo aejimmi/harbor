@@ -2,8 +2,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::ServerAction;
 use super::output;
+use super::{CreateArgs, ServerAction};
 use crate::config::{self, UserConfig};
 use crate::dns::{self, DnsProvider};
 use crate::provider::{CloudProvider, ServerStatus};
@@ -12,7 +12,7 @@ use crate::script::ScriptBuilder;
 
 pub async fn run(action: ServerAction, config_path: Option<&Path>) -> Result<()> {
     match action {
-        ServerAction::Create { .. } => create(action, config_path).await,
+        ServerAction::Create(args) => create(args, config_path).await,
         ServerAction::Delete {
             name,
             hostname,
@@ -23,93 +23,87 @@ pub async fn run(action: ServerAction, config_path: Option<&Path>) -> Result<()>
     }
 }
 
-async fn create(action: ServerAction, config_path: Option<&Path>) -> Result<()> {
-    let ServerAction::Create {
-        name,
-        ssh_key,
-        r#type: server_type,
-        location,
-        image,
-        hostname,
-        setup_config: setup_config_path,
-        debug,
-        quiet,
-    } = action
-    else {
-        unreachable!()
-    };
-
+async fn create(args: CreateArgs, config_path: Option<&Path>) -> Result<()> {
     let user_config = UserConfig::load(config_path).context("loading user config")?;
+    let setup_script = build_setup_script(args.setup_config.as_deref(), &user_config)?;
 
-    anyhow::ensure!(
-        !user_config.hetzner.token.is_empty(),
-        "hetzner.token is required in config file"
-    );
-
-    let setup_path = match setup_config_path {
-        Some(p) => p,
-        None => config::default_server_config_path()?,
-    };
-    let setup_config = config::SetupConfig::load(&setup_path).context("loading setup config")?;
-    let config_dir = setup_path.parent().unwrap_or(Path::new("."));
-    let setup_script = ScriptBuilder::from_setup_config(
-        &setup_config,
-        user_config.github.token_for(&setup_config.name),
-        config_dir,
-    )
-    .context("building setup script")?
-    .build();
-
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
+    let provider = super::remote::hetzner_provider(&user_config)?;
     let spec = config::ServerSpec {
-        name: name.clone(),
-        server_type: server_type.clone(),
-        location: location.clone(),
-        image,
+        name: args.name.clone(),
+        server_type: args.r#type.clone(),
+        location: args.location.clone(),
+        image: args.image.clone(),
     };
-
-    if !quiet {
-        output::header(&format!("Provisioning server: {name}"));
+    if !args.quiet {
+        output::header(&format!("Provisioning server: {}", spec.name));
         output::info(&format!(
-            "Type: {server_type}, Location: {location}, Image: {}",
-            spec.image
+            "Type: {}, Location: {}, Image: {}",
+            spec.server_type, spec.location, spec.image
         ));
     }
 
     let server = provider
-        .create_server(&spec, &ssh_key)
+        .create_server(&spec, &args.ssh_key)
         .await
         .context("creating server")?;
-
-    if let Some(ip) = server.ip {
-        if let Some(h) = &hostname
-            && dns::is_configured(&user_config)
-        {
-            let full = dns::full_hostname(h, &user_config.dns.base_domain);
-            if let Some(dns_provider) =
-                dns::cloudflare::CloudflareProvider::from_config(&user_config)?
-            {
-                if !quiet {
-                    output::info(&format!("Creating DNS: {full} → {ip}"));
-                }
-                dns_provider.upsert_a_record(&full, ip).await?;
-                if !quiet {
-                    output::success(&format!("DNS record created: {full}"));
-                }
-            }
-        }
-
-        let provisioner = Provisioner::new(debug, quiet);
-        provisioner
-            .provision(ip, &name, &setup_script, None)
-            .await
-            .context("provisioning server")?;
+    let Some(ip) = server.ip else {
+        anyhow::bail!("server {} created but no IP assigned", spec.name);
+    };
+    if let Some(h) = &args.hostname {
+        upsert_dns(h, ip, &user_config, args.quiet).await?;
     }
 
+    Provisioner::new(args.debug, args.quiet)
+        .provision(ip, &spec.name, &setup_script, None)
+        .await
+        .context("provisioning server")?;
+    if !args.quiet {
+        output::success(&format!("Server {} provisioned successfully!", spec.name));
+    }
+    Ok(())
+}
+
+/// Render the setup script from `--setup-config`, or the discovered
+/// harbor.yaml. Runs before the server exists so config errors cost nothing.
+fn build_setup_script(setup_path: Option<&Path>, user_config: &UserConfig) -> Result<String> {
+    let setup_path = match setup_path {
+        Some(p) => p.to_path_buf(),
+        None => super::discover::find_config()?,
+    };
+    let setup_config = config::SetupConfig::load(&setup_path).context("loading setup config")?;
+    config::require_backup_creds(&setup_config, user_config)?;
+    let config_dir = setup_path.parent().unwrap_or(Path::new("."));
+    Ok(ScriptBuilder::from_setup_config(
+        &setup_config,
+        user_config.github.token_for(&setup_config.name),
+        config_dir,
+        user_config.backup.for_project(&setup_config.name),
+    )
+    .context("building setup script")?
+    .build())
+}
+
+/// Point `hostname` at `ip` when DNS is configured.
+async fn upsert_dns(
+    hostname: &str,
+    ip: std::net::IpAddr,
+    user_config: &UserConfig,
+    quiet: bool,
+) -> Result<()> {
+    if !dns::is_configured(user_config) {
+        return Ok(());
+    }
+    let Some(dns_provider) = dns::cloudflare::CloudflareProvider::from_config(user_config)? else {
+        return Ok(());
+    };
+    let full = dns::full_hostname(hostname, &user_config.dns.base_domain);
     if !quiet {
-        output::success(&format!("Server {name} provisioned successfully!"));
+        output::info(&format!("Creating DNS: {full} → {ip}"));
     }
-
+    dns_provider.upsert_a_record(&full, ip).await?;
+    if !quiet {
+        output::success(&format!("DNS record created: {full}"));
+    }
     Ok(())
 }
 
@@ -121,12 +115,7 @@ async fn delete(
 ) -> Result<()> {
     let user_config = UserConfig::load(config_path).context("loading user config")?;
 
-    anyhow::ensure!(
-        !user_config.hetzner.token.is_empty(),
-        "hetzner.token is required in config file"
-    );
-
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
+    let provider = super::remote::hetzner_provider(&user_config)?;
     let server = provider.get_server(name).await?;
 
     if !quiet {
@@ -170,12 +159,7 @@ async fn delete(
 async fn list(config_path: Option<&Path>) -> Result<()> {
     let user_config = UserConfig::load(config_path).context("loading user config")?;
 
-    anyhow::ensure!(
-        !user_config.hetzner.token.is_empty(),
-        "hetzner.token is required in config file"
-    );
-
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
+    let provider = super::remote::hetzner_provider(&user_config)?;
     let servers = provider.list_servers().await?;
 
     if servers.is_empty() {

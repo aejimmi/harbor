@@ -118,17 +118,38 @@ fn docker_unit_body(svc: &ServiceSpec, image: &str) -> Vec<String> {
 
 /// Build the `docker run` command line from a container `ServiceSpec`.
 ///
-/// Flag order: `--rm`, `--name`, `--log-driver=journald`, then ports in
-/// declaration order, volumes in declaration order, a single
-/// `--env-file` reference (only if `svc.env` is non-empty), then the
-/// image. Env values are never rendered inline — they live in
-/// `/etc/harbor/env/<name>.env` with mode `0600 root:root`.
+/// Flag order: `--rm`, `--name`, `--log-driver=journald`, security
+/// flags, then ports in declaration order, volumes in declaration
+/// order, a single `--env-file` reference (only if `svc.env` is
+/// non-empty), then the image.
+///
+/// Security defaults applied to every container:
+/// - `--security-opt=no-new-privileges` (prevents setuid escalation)
+/// - `--pids-limit=N` (default 256, configurable, 0 disables)
+///
+/// Opt-in via `ServiceSpec` fields:
+/// - `cap_drop` / `cap_add` (e.g. `cap_drop: [ALL]`)
+/// - `read_only` (adds `--read-only --tmpfs /tmp:size=64m`)
 fn docker_run_command(svc: &ServiceSpec, image: &str) -> String {
     let mut parts: Vec<String> = vec![
         "/usr/bin/docker run --rm".to_owned(),
         format!("--name {}", svc.name),
         "--log-driver=journald".to_owned(),
+        "--security-opt=no-new-privileges".to_owned(),
     ];
+    if svc.pids_limit > 0 {
+        parts.push(format!("--pids-limit={}", svc.pids_limit));
+    }
+    for cap in &svc.cap_drop {
+        parts.push(format!("--cap-drop={cap}"));
+    }
+    for cap in &svc.cap_add {
+        parts.push(format!("--cap-add={cap}"));
+    }
+    if svc.read_only {
+        parts.push("--read-only".to_owned());
+        parts.push("--tmpfs /tmp:size=64m".to_owned());
+    }
     for port in &svc.ports {
         parts.push(format!("-p {port}"));
     }
@@ -169,6 +190,9 @@ fn render_podman_quadlet(svc: &ServiceSpec, lines: &mut Vec<String>) {
 /// Body of a Podman `.container` Quadlet file. The `[Service]` section
 /// deliberately has no `ExecStart=` — Quadlet writes one from the
 /// `[Container]` stanza at `daemon-reload` time.
+///
+/// Security defaults: `PidsLimit=N` in `[Container]` (default 256,
+/// configurable, 0 disables), `NoNewPrivileges=true` in `[Service]`.
 fn podman_quadlet_body(svc: &ServiceSpec, image: &str) -> Vec<String> {
     let (restart, restart_sec) = restart_defaults(svc);
     let name = &svc.name;
@@ -182,12 +206,16 @@ fn podman_quadlet_body(svc: &ServiceSpec, image: &str) -> Vec<String> {
         format!("Image={image}"),
         format!("ContainerName={name}"),
     ];
+    if svc.pids_limit > 0 {
+        body.push(format!("PidsLimit={}", svc.pids_limit));
+    }
     append_quadlet_container_lists(svc, &mut body);
     body.extend([
         String::new(),
         "[Service]".to_owned(),
         format!("Restart={restart}"),
         format!("RestartSec={restart_sec}"),
+        "NoNewPrivileges=true".to_owned(),
         String::new(),
         "[Install]".to_owned(),
         "WantedBy=multi-user.target".to_owned(),
@@ -195,14 +223,24 @@ fn podman_quadlet_body(svc: &ServiceSpec, image: &str) -> Vec<String> {
     body
 }
 
-/// Append `PublishPort=`, `Volume=`, and `EnvironmentFile=` entries to
-/// a Quadlet `[Container]` section body.
+/// Append container lists and security directives to a Quadlet
+/// `[Container]` section body.
 ///
 /// Env values are never inlined via `Environment=KEY=VAL`. When
 /// `svc.env` is non-empty, a single `EnvironmentFile=` line is
 /// emitted pointing at `/etc/harbor/env/<name>.env`, which lives
 /// outside the world-readable Quadlet directory.
 fn append_quadlet_container_lists(svc: &ServiceSpec, body: &mut Vec<String>) {
+    for cap in &svc.cap_drop {
+        body.push(format!("DropCapability={cap}"));
+    }
+    for cap in &svc.cap_add {
+        body.push(format!("AddCapability={cap}"));
+    }
+    if svc.read_only {
+        body.push("ReadOnly=true".to_owned());
+        body.push("Tmpfs=/tmp:size=64m".to_owned());
+    }
     for port in &svc.ports {
         body.push(format!("PublishPort={port}"));
     }

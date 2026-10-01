@@ -1,9 +1,11 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Deserialize;
 
 use super::ConfigError;
+pub use super::setup_backup::{BackupConfig, BackupSchedule, BackupTransport};
+pub use super::setup_service::{ContainerRuntime, ServiceSpec};
 
 /// Server setup/provisioning configuration (`harbor.yaml`).
 #[derive(Debug, Deserialize)]
@@ -18,7 +20,13 @@ pub struct SetupConfig {
 }
 
 /// The inner `setup:` block of a setup config.
+///
+/// `deny_unknown_fields` surfaces a parse error for legacy keys such as the
+/// old top-level `deploy:` block that has been replaced by the `deploys:`
+/// map. Users with stale YAML see the unknown field name instead of silent
+/// no-ops.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SetupSection {
     #[serde(default)]
     pub packages: Vec<String>,
@@ -26,8 +34,6 @@ pub struct SetupSection {
     pub components: Components,
     #[serde(default)]
     pub environment: HashMap<String, String>,
-    #[serde(default)]
-    pub github_repos: Vec<GithubRepo>,
     #[allow(dead_code)]
     #[serde(default)]
     pub ssh_keys: SshKeys,
@@ -44,14 +50,21 @@ pub struct SetupSection {
     #[allow(dead_code)]
     #[serde(default)]
     pub dns: DnsConfig,
+    /// Named deployable entries. Each entry is independently runnable via
+    /// `harbor deploy <name>`; its `services` field scopes health checks
+    /// after the deploy to those systemd units only.
     #[serde(default)]
-    pub deploy: Option<DeployConfig>,
+    pub deploys: HashMap<String, DeployConfig>,
     #[serde(default)]
     pub system: SystemConfig,
     #[serde(default)]
     pub updates: UpdateConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    /// Optional backup configuration. When absent, the server is not
+    /// provisioned with backup artifacts. See 011-backup-config spec.
+    #[serde(default)]
+    pub backup: Option<BackupConfig>,
 }
 
 /// Installable software components.
@@ -133,20 +146,6 @@ pub struct SwapConfig {
     pub size: String,
 }
 
-/// A GitHub repository to clone, build, and install.
-#[derive(Debug, Clone, Deserialize)]
-pub struct GithubRepo {
-    pub repo: String,
-    #[serde(default)]
-    pub binary: String,
-    #[serde(default)]
-    pub install_path: String,
-    #[serde(default)]
-    pub config_source: String,
-    #[serde(default)]
-    pub config_target: String,
-}
-
 /// SSH key paths for private repo access.
 #[derive(Debug, Default, Deserialize)]
 pub struct SshKeys {
@@ -200,102 +199,29 @@ pub struct DirectorySpec {
     pub mode: String,
 }
 
-/// Container runtime used when a `ServiceSpec` declares an `image`.
-///
-/// Docker is the default because it is what most users reach for first.
-/// Selecting `Podman` routes the service through the Quadlet path
-/// (`/etc/containers/systemd/<name>.container`) instead of a raw Docker
-/// systemd unit.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ContainerRuntime {
-    /// Render a hand-written Docker systemd unit.
-    #[default]
-    Docker,
-    /// Render a Podman Quadlet `.container` file.
-    Podman,
-}
-
-/// A systemd service to configure.
-///
-/// When `image` is `None`, Harbor renders a native systemd unit driven by
-/// `exec_start`. When `image` is `Some`, Harbor renders a container-aware
-/// unit (Docker `.service` or Podman Quadlet `.container`) selected by
-/// `runtime`. The two modes are mutually exclusive: setting both `image`
-/// and a non-empty `exec_start` is rejected at config load.
-///
-/// `Debug` is implemented manually so that `env` values are redacted
-/// when a `ServiceSpec` is formatted — e.g. in `tracing::debug!(?svc)`
-/// or a panic message — preventing secrets from leaking via logs.
-#[derive(Clone, Deserialize)]
-pub struct ServiceSpec {
-    pub name: String,
-    #[serde(default)]
-    pub enabled: bool,
-    /// Start the service immediately. Defaults to false.
-    #[serde(default)]
-    pub start: bool,
-    #[serde(default)]
-    pub user: String,
-    #[serde(default)]
-    pub working_directory: String,
-    #[serde(default)]
-    pub exec_start: String,
-    #[serde(default)]
-    pub restart: String,
-    #[serde(default)]
-    pub restart_sec: u32,
-    /// Container image to run. Setting this switches rendering to the
-    /// container path; `exec_start` must be empty when `image` is set.
-    #[serde(default)]
-    pub image: Option<String>,
-    /// Which container runtime to use. Defaults to `Docker`.
-    #[serde(default)]
-    pub runtime: ContainerRuntime,
-    /// Port publications in native runtime syntax
-    /// (`host:container[/proto]`). Emitted in declaration order.
-    #[serde(default)]
-    pub ports: Vec<String>,
-    /// Bind mounts in native runtime syntax (`src:dest[:opts]`).
-    /// Emitted in declaration order.
-    #[serde(default)]
-    pub volumes: Vec<String>,
-    /// Environment variables scoped to this service. Uses `BTreeMap`
-    /// for deterministic sorted rendering.
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
-}
-
-impl std::fmt::Debug for ServiceSpec {
-    /// Redacts the `env` map — only the key count is printed — so that
-    /// secret values never surface in trace logs or panic messages.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServiceSpec")
-            .field("name", &self.name)
-            .field("enabled", &self.enabled)
-            .field("start", &self.start)
-            .field("user", &self.user)
-            .field("working_directory", &self.working_directory)
-            .field("exec_start", &self.exec_start)
-            .field("restart", &self.restart)
-            .field("restart_sec", &self.restart_sec)
-            .field("image", &self.image)
-            .field("runtime", &self.runtime)
-            .field("ports", &self.ports)
-            .field("volumes", &self.volumes)
-            .field("env", &format!("<{} keys redacted>", self.env.len()))
-            .finish()
-    }
-}
-
-/// Clone a repo and run build/install steps.
+/// A single named deploy entry. Harbor preserves the built `binary`
+/// under `/opt/harbor/<name>/<sha>/<basename>` and swaps a symlink at
+/// `install` to point at it. Rollback swaps the symlink back — no
+/// rebuild. `binary` and `install` are required.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployConfig {
     /// Repository URL (e.g. `github.com/aejimmi/bliss-core`).
     pub repo: String,
+    /// Repo-relative path to the single binary produced by `steps`
+    /// (e.g. `target/release/web`). Traversal and absolute paths are
+    /// rejected at config load.
+    pub binary: String,
+    /// Absolute path where the active-version symlink is maintained
+    /// (e.g. `/usr/local/bin/web`).
+    pub install: String,
     /// Commands to run inside the cloned repo.
     #[serde(default)]
     pub steps: Vec<String>,
+    /// Systemd service names whose health is checked after the deploy.
+    /// Empty = no health checks — deploy succeeds on step exit codes alone.
+    #[serde(default)]
+    pub services: Vec<String>,
 }
 
 /// DNS integration settings within setup config.
@@ -340,6 +266,9 @@ pub struct SecurityConfig {
     pub ssh_hardening: bool,
     #[serde(default)]
     pub kernel_hardening: bool,
+    /// Mount `/tmp`, `/var/tmp`, `/dev/shm` with `noexec,nosuid,nodev`.
+    #[serde(default)]
+    pub mount_hardening: bool,
 }
 
 /// UFW firewall settings.
@@ -385,7 +314,9 @@ pub struct FileSpec {
 /// Server infrastructure specification (read from `server:` block).
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerSection {
-    /// Server name on Hetzner.
+    /// Server name on Hetzner. Fleet roles may omit it — fleet generates
+    /// `{role}-{fleet}-{n}` names; single-server commands require it.
+    #[serde(default)]
     pub name: String,
     /// Hetzner server type.
     #[serde(default = "default_server_type")]
@@ -416,22 +347,20 @@ fn default_image() -> String {
 }
 
 impl SetupConfig {
-    /// Load a setup config from a YAML file.
+    /// Load a setup config from a YAML file. Runs `validate()` after
+    /// deserialization so structural rules that serde can't express —
+    /// deploy-name shape, no `..` in `binary:`, absolute `install:` —
+    /// surface as `Invalid` errors before they reach bash rendering.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        if !path.exists() {
-            return Err(ConfigError::NotFound {
-                path: path.display().to_string(),
-            });
-        }
+        let config: Self = super::paths::load_yaml(path)?;
+        config.validate()?;
+        Ok(config)
+    }
 
-        let data = std::fs::read_to_string(path).map_err(|e| ConfigError::ReadFailed {
-            path: path.display().to_string(),
-            source: e,
-        })?;
-
-        serde_yaml::from_str(&data).map_err(|e| ConfigError::ParseFailed {
-            path: path.display().to_string(),
-            source: e,
-        })
+    /// Validate post-parse invariants that serde can't express.
+    ///
+    /// Delegates to `setup_validate` — see that module for the rules.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        super::setup_validate::validate(self)
     }
 }

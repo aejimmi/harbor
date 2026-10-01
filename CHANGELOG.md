@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.3.0
+
+New:
+- backup: declarative backup: block archives paths on a schedule (hourly/daily/weekly with 1h jitter), ships to S3-compatible storage, and prunes by retention_days
+- backup: harbor backup runs on demand; harbor backup list shows archives newest-first
+- backup: transport choice between pinned rc (pure Rust, default) and upstream rclone; services are stopped for the archive and always restarted, even if the backup fails; S3 credentials never appear on a command line
+- restore: harbor restore replaces live data with a pre-flight summary, confirmation (--yes skips), and per-path swap that rolls back on any failure; works on a fresh server; --at picks a specific archive
+- deploy: named deploys under deploys: — run one with harbor deploy <name>, or all with --all
+- deploy: builds are kept under /opt/harbor/<name>/<sha>/ so rollback is a symlink swap with no rebuild; last five kept
+- up: harbor up runs every configured deploy after provisioning
+- services: container security controls — cap_drop, cap_add, read_only, pids_limit; no-new-privileges and pids_limit=256 by default
+- security: mount hardening remounts /tmp, /var/tmp, /dev/shm with noexec,nosuid,nodev
+- ssh: host keys are pinned in ~/.harbor/known_hosts; a changed key is rejected
+- status: shows backup timer state, last run, and next run
+- examples: ready-to-copy configs in examples/ — minimal app, container service with backups, two-role fleet
+
+Breaking:
+- deploy: the deploy: block is replaced by the deploys: map; harbor deploy and harbor rollback now take a <name>
+- deploy: each deploys: entry requires binary (repo-relative) and install (absolute symlink path)
+- config: harbor.yaml is validated at load — unknown setup: keys, unsafe names, relative or traversing paths, non-octal modes, and multi-line env values are rejected
+- config: setup.github_repos removed — use deploys:
+- init: harbor init writes only ~/.harbor/config.yaml; the configs-deploy/ and configs-server/ templates are gone
+- server: harbor server create uses the discovered harbor.yaml when --setup-config is omitted
+- dns: no default base_domain — DNS is managed only when cloudflare credentials and dns.base_domain are set
+
+Fix:
+- provision: failing setup and deploy scripts are reported as failed — previously some failures showed as success
+- provision: a missing or empty ssh-agent fails immediately instead of retrying for 5 minutes
+- rollback: steps back through deploy history from the live version — no longer a silent no-op with one deploy, or flipping between two versions when repeated; a given SHA must be a full 40-char SHA
+- fleet: config and credentials are checked before any server is created, so an error can't leave a paid server unprovisioned
+- fleet: fleet down keeps going past individual failures and reports them
+- fleet: role harbor.yaml files no longer need server.name
+- up: a server created without an IP fails instead of reporting success
+- security: ufw always allows SSH (22/tcp), so a rules list without it can't lock you out
+- config: a missing files: source fails setup instead of being skipped with a warning
+- config: HCLOUD_TOKEN works for every command, not just fleet
+- deploy: ssh-style git remotes (git@host:path) are no longer rewritten with https://
+- deps: russh 0.60.3 and h2 0.4.19 for RUSTSEC-2026-0153, -0154, -0258
+
 ## v0.2.0
 
 New:

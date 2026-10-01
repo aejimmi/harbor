@@ -26,5 +26,13 @@ pub fn find_config() -> Result<PathBuf> {
 pub fn load_project_config() -> Result<(SetupConfig, PathBuf)> {
     let path = find_config()?;
     let config = SetupConfig::load(&path).context("loading harbor.yaml")?;
+    if let Some(server) = &config.server
+        && server.name.is_empty()
+    {
+        bail!(
+            "{}: server.name is required (only fleet roles may omit it)",
+            path.display()
+        );
+    }
     Ok((config, path))
 }

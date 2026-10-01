@@ -41,7 +41,7 @@ pub trait DnsProvider: Send + Sync {
 /// Extract hostname from server name pattern.
 ///
 /// Pattern: `service-hostname-env-location`
-/// Example: `"collector-tergar-prod-nbg1"` -> `"tergar"`
+/// Example: `"collector-myapp-prod-nbg1"` -> `"myapp"`
 pub fn extract_hostname(server_name: &str) -> &str {
     let mut parts = server_name.split('-').filter(|s| !s.is_empty());
     // Skip the first part (service name), return the second (hostname).
@@ -51,12 +51,14 @@ pub fn extract_hostname(server_name: &str) -> &str {
 
 /// Build full DNS hostname from name and base domain.
 ///
-/// Example: `("tergar", ".i.usercanal.com")` -> `"tergar.i.usercanal.com"`
+/// Example: `("myapp", ".i.example.com")` -> `"myapp.i.example.com"`
 pub fn full_hostname(name: &str, base_domain: &str) -> String {
     format!("{name}{base_domain}")
 }
 
 /// Check if DNS is configured (both `api_token` and `zone_id` present).
 pub fn is_configured(config: &UserConfig) -> bool {
-    !config.cloudflare.api_token.is_empty() && !config.cloudflare.zone_id.is_empty()
+    !config.cloudflare.api_token.is_empty()
+        && !config.cloudflare.zone_id.is_empty()
+        && !config.dns.base_domain.is_empty()
 }

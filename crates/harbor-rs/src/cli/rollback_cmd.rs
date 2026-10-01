@@ -2,50 +2,48 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use super::deploy_cmd::{resolve_entry, sorted_names};
 use super::{output, remote};
+use crate::config::setup::DeployConfig;
 use crate::provision::{Provisioner, Spinner};
-use crate::script::{DeployComponent, RollbackComponent, ScriptComponent};
+use crate::script::{RollbackComponent, ScriptComponent};
 
-/// Rollback to a specific version (or previous deploy).
-pub async fn run(version: Option<String>, debug: bool, config_path: Option<&Path>) -> Result<()> {
+/// Rollback a named deploy to a specific SHA, or to the previous deploy
+/// recorded in `~/.harbor/deploys.log` for that name if no SHA is given.
+///
+/// No git, no rebuild. The versioned binary preserved by the original
+/// forward deploy is promoted back via an atomic symlink swap and the
+/// services are restarted. A SHA without a preserved versioned dir
+/// (pre-feature or already garbage-collected) fails loud.
+pub async fn run(
+    name: String,
+    version: Option<String>,
+    debug: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    if let Some(sha) = version.as_deref() {
+        anyhow::ensure!(
+            is_full_sha(sha),
+            "invalid version '{sha}': expected a full 40-character git SHA"
+        );
+    }
     let server = remote::resolve_server(config_path).await?;
-    let deploy = server
-        .config
-        .setup
-        .deploy
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no 'deploy:' section in harbor.yaml"))?;
+    let names = sorted_names(&server.config);
+    let deploy = resolve_entry(&server.config, &name, &names)?;
 
-    let rollback_lines = if let Some(ref sha) = version {
+    if let Some(sha) = version.as_deref() {
         output::header(&format!(
-            "Rolling back {} ({}) to {}",
-            server.name, server.ip, sha
-        ));
-        RollbackComponent {
-            repo: deploy.repo.clone(),
-            version: sha.clone(),
-            steps: deploy.steps.clone(),
-        }
-        .render()
-    } else {
-        output::header(&format!(
-            "Rolling back {} ({}) to previous version",
+            "Rolling back {name} on {} ({}) to {sha}",
             server.name, server.ip
         ));
-        rollback_to_previous(&deploy.repo, &deploy.steps)
-    };
+    } else {
+        output::header(&format!(
+            "Rolling back {name} on {} ({}) to previous version",
+            server.name, server.ip
+        ));
+    }
 
-    let services = remote::started_services(&server.config);
-    let svc_refs: Vec<&str> = services.iter().map(String::as_str).collect();
-
-    let mut lines = vec!["#!/bin/bash".to_owned(), "set -e".to_owned(), String::new()];
-
-    lines.extend(remote::lock_preamble());
-    lines.push(String::new());
-    lines.extend(rollback_lines);
-    lines.extend(remote::health_check_lines(&svc_refs));
-
-    let script = lines.join("\n");
+    let script = build_rollback_script(&name, deploy, version.as_deref());
     let spinner = Spinner::start("Connecting via SSH...", debug);
 
     let provisioner = Provisioner::new(debug, false);
@@ -54,44 +52,46 @@ pub async fn run(version: Option<String>, debug: bool, config_path: Option<&Path
         .await
     {
         spinner.fail();
-        return Err(e).context("rollback failed");
+        return Err(e).context(format!("rollback '{name}' failed"));
     }
 
-    spinner.success(format!("Rolled back {}", server.name));
+    spinner.success(format!("Rolled back {name} on {}", server.name));
     Ok(())
 }
 
-/// Build rollback lines that read the previous SHA from deploys.log on the server.
-fn rollback_to_previous(repo: &str, steps: &[String]) -> Vec<String> {
-    let repo_name = DeployComponent::repo_name(repo);
+/// Render the full rollback bash script: lock preamble plus the
+/// `RollbackComponent` block. Health-check lines are embedded inside
+/// the component so they fire between the symlink swap and the
+/// deploys.log write.
+pub(super) fn build_rollback_script(
+    name: &str,
+    deploy: &DeployConfig,
+    version: Option<&str>,
+) -> String {
+    let svc_refs: Vec<&str> = deploy.services.iter().map(String::as_str).collect();
+    let health_check = remote::health_check_lines(&svc_refs);
 
-    let mut lines = vec![
-        "if [ ! -f ~/.harbor/deploys.log ]; then".to_owned(),
-        "  echo 'No deploy history found' >&2".to_owned(),
-        "  exit 1".to_owned(),
-        "fi".to_owned(),
-        "PREV_SHA=$(tail -n 2 ~/.harbor/deploys.log | head -n 1 | awk '{print $3}')".to_owned(),
-        "if [ -z \"$PREV_SHA\" ]; then".to_owned(),
-        "  echo 'No previous version found in deploy history' >&2".to_owned(),
-        "  exit 1".to_owned(),
-        "fi".to_owned(),
-        "echo \"Rolling back to $PREV_SHA\"".to_owned(),
-        format!("cd $HOME/{repo_name}"),
-        "git fetch --all".to_owned(),
-        "git checkout $PREV_SHA".to_owned(),
-    ];
-
-    for step in steps {
-        lines.push(step.clone());
+    let rollback_lines = RollbackComponent {
+        name: name.to_owned(),
+        version: version.map(str::to_owned),
+        binary: deploy.binary.clone(),
+        install: deploy.install.clone(),
+        services: deploy.services.clone(),
+        health_check,
     }
+    .render();
 
-    // Record rollback
-    lines.push("mkdir -p ~/.harbor".to_owned());
-    lines.push(
-        "echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $(whoami) $(git rev-parse HEAD) rollback\" >> ~/.harbor/deploys.log"
-            .to_owned(),
-    );
-    lines.push("echo 'Rollback complete'".to_owned());
+    let mut lines = vec!["#!/bin/bash".to_owned(), "set -e".to_owned(), String::new()];
+    lines.extend(remote::lock_preamble());
+    lines.push(String::new());
+    lines.extend(rollback_lines);
 
-    lines
+    lines.join("\n")
+}
+
+/// True for a full lowercase-hex git SHA — the form versioned build
+/// directories are named by. Also keeps CLI input out of the remote
+/// script unless it is plain hex.
+pub(super) fn is_full_sha(sha: &str) -> bool {
+    sha.len() == 40 && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }

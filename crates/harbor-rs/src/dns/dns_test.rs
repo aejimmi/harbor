@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_extract_hostname_standard_pattern() {
-    assert_eq!(extract_hostname("collector-tergar-prod-nbg1"), "tergar");
+    assert_eq!(extract_hostname("collector-myapp-prod-nbg1"), "myapp");
 }
 
 #[test]
@@ -28,8 +28,8 @@ fn test_extract_hostname_two_parts() {
 #[test]
 fn test_full_hostname() {
     assert_eq!(
-        full_hostname("tergar", ".i.usercanal.com"),
-        "tergar.i.usercanal.com"
+        full_hostname("myapp", ".i.example.com"),
+        "myapp.i.example.com"
     );
 }
 
@@ -57,6 +57,13 @@ fn test_is_configured_missing_zone() {
 }
 
 #[test]
+fn test_is_configured_missing_base_domain() {
+    let mut config = make_config("token", "zone");
+    config.dns.base_domain.clear();
+    assert!(!is_configured(&config));
+}
+
+#[test]
 fn test_is_configured_both_missing() {
     let config = make_config("", "");
     assert!(!is_configured(&config));
@@ -64,7 +71,8 @@ fn test_is_configured_both_missing() {
 
 fn make_config(api_token: &str, zone_id: &str) -> UserConfig {
     use crate::config::{
-        CloudflareCredentials, DnsSettings, GitHubCredentials, HetznerCredentials,
+        BackupCredentialsMap, CloudflareCredentials, DnsSettings, GitHubCredentials,
+        HetznerCredentials,
     };
 
     UserConfig {
@@ -75,7 +83,11 @@ fn make_config(api_token: &str, zone_id: &str) -> UserConfig {
         hetzner: HetznerCredentials {
             token: String::new(),
         },
-        dns: DnsSettings::default(),
+        dns: DnsSettings {
+            base_domain: ".i.example.com".to_owned(),
+            ..DnsSettings::default()
+        },
         github: GitHubCredentials::default(),
+        backup: BackupCredentialsMap::default(),
     }
 }

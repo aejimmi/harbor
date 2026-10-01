@@ -14,7 +14,7 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no 'server:' section in harbor.yaml"))?;
 
     let user_config = UserConfig::load(config_path).context("loading user config")?;
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
+    let provider = super::remote::hetzner_provider(&user_config)?;
 
     match provider.get_server(&server.name).await? {
         Some(s) => {
@@ -44,7 +44,12 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
                     .map(|svc| svc.name.as_str())
                     .collect();
 
-                fetch_app_state(ip, &services);
+                let backup_project = setup_config
+                    .setup
+                    .backup
+                    .as_ref()
+                    .map(|_| setup_config.name.as_str());
+                fetch_app_state(ip, &services, backup_project);
             }
         }
         None => {
@@ -56,19 +61,9 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
 }
 
 /// SSH into the server to gather app state (deploy version, services, uptime, disk).
-fn fetch_app_state(ip: std::net::IpAddr, services: &[&str]) {
-    let script = build_status_script(services);
-
-    let result = std::process::Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "ConnectTimeout=5",
-            &format!("root@{ip}"),
-            &script,
-        ])
-        .output();
+fn fetch_app_state(ip: std::net::IpAddr, services: &[&str], backup_project: Option<&str>) {
+    let script = build_status_script(services, backup_project);
+    let result = super::remote::ssh_exec_script(ip, &script);
 
     match result {
         Ok(out) if out.status.success() => {
@@ -80,17 +75,22 @@ fn fetch_app_state(ip: std::net::IpAddr, services: &[&str]) {
                 output::info(line);
             }
         }
-        Ok(_) => {
-            output::subtle("  (could not fetch app state)");
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            output::subtle(&format!("  (could not fetch app state: {})", stderr.trim()));
         }
-        Err(_) => {
-            output::subtle("  (SSH unavailable)");
+        Err(e) => {
+            output::subtle(&format!("  (SSH unavailable: {e})"));
         }
     }
 }
 
 /// Build a bash snippet that gathers deploy + service info.
-fn build_status_script(services: &[&str]) -> String {
+///
+/// When `backup_project` is `Some`, append a terminal block that
+/// queries the systemd timer state — adds three lines of output
+/// without a second SSH round-trip (spec 017 R2).
+pub(super) fn build_status_script(services: &[&str], backup_project: Option<&str>) -> String {
     let mut parts = vec![
         // Last deploy
         r#"if [ -f ~/.harbor/deploys.log ]; then
@@ -102,8 +102,9 @@ fi"#
         .to_owned(),
         // Uptime
         r#"echo "Uptime:   $(uptime -p 2>/dev/null || uptime)""#.to_owned(),
-        // Disk
-        r#"echo "Disk:     $(df -h / | awk 'NR==2{print $3 "/" $2 " (" $5 " used)"}')"#.to_owned(),
+        // Disk. Raw string so the nested `"` quoting reaches bash
+        // verbatim — an unterminated quote aborts the whole status probe.
+        r#"echo "Disk:     $(df -h / | awk 'NR==2{print $3 "/" $2 " (" $5 " used)"}')""#.to_owned(),
     ];
 
     // Service statuses
@@ -115,6 +116,26 @@ fi"#
                 r#"STATUS=$(systemctl is-active {svc} 2>/dev/null || echo "not-found"); echo "  {svc}: $STATUS""#
             ));
         }
+    }
+
+    // Backup timer state (spec 017 R1). Terminal block — appended
+    // after services so the existing output order is preserved.
+    if let Some(project) = backup_project {
+        parts.push("echo ''".to_owned());
+        parts.push("echo 'Backup:'".to_owned());
+        parts.push(format!(
+            r#"TIMER=harbor-backup-{project}.timer
+if systemctl is-enabled "$TIMER" >/dev/null 2>&1; then
+  LAST=$(systemctl show "$TIMER" -p LastTriggerUSec --value)
+  NEXT=$(systemctl show "$TIMER" -p NextElapseUSecRealtime --value)
+  STATE=$(systemctl show "$TIMER" -p ActiveState --value)
+  echo "  state: $STATE"
+  echo "  last:  ${{LAST:-never}}"
+  echo "  next:  ${{NEXT:-unknown}}"
+else
+  echo '  (backup timer not enabled on server)'
+fi"#
+        ));
     }
 
     parts.join("\n")

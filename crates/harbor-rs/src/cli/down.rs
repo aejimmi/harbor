@@ -16,12 +16,7 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no 'server:' section in harbor.yaml"))?;
 
     let user_config = UserConfig::load(config_path).context("loading user config")?;
-    anyhow::ensure!(
-        !user_config.hetzner.token.is_empty(),
-        "hetzner.token is required"
-    );
-
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
+    let provider = super::remote::hetzner_provider(&user_config)?;
 
     output::header(&format!("Destroying {}", server.name));
 
@@ -41,7 +36,9 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
         if let Some(dns_provider) = dns::cloudflare::CloudflareProvider::from_config(&user_config)?
         {
             output::info(&format!("Removing DNS: {full}"));
-            let _ = dns_provider.delete_a_record(&full).await;
+            if let Err(e) = dns_provider.delete_a_record(&full).await {
+                output::error(&format!("DNS cleanup failed for {full}: {e}"));
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::{ScriptComponent, status_echo};
+use super::{ScriptComponent, shell_quote, status_echo};
 
 /// Set environment variables in `/etc/environment`.
 pub struct EnvComponent {
@@ -22,10 +22,12 @@ impl ScriptComponent for EnvComponent {
             if is_sensitive {
                 lines.push(status_echo(&format!("Setting up {key}")));
             }
-            lines.push(format!(
-                "echo 'export {key}=\"{value}\"' >> /etc/environment"
-            ));
-            lines.push(format!("export {key}=\"{value}\""));
+            // Keys and values are validated at config load (identifier
+            // keys; single-line values without `"`). Quoting the whole
+            // argument keeps `'`, `$`, and backticks literal.
+            let entry = shell_quote(&format!("{key}=\"{value}\""));
+            lines.push(format!("echo {entry} >> /etc/environment"));
+            lines.push(format!("export {key}={}", shell_quote(value)));
         }
 
         lines

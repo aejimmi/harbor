@@ -21,8 +21,8 @@ async fn main() -> Result<()> {
     tokio::select! {
         result = cli::run(cli) => result,
         _ = tokio::signal::ctrl_c() => {
-            eprintln!("\nReceived interrupt signal, cleaning up...");
-            Ok(())
+            eprintln!("\nInterrupted");
+            std::process::exit(130);
         }
     }
 }

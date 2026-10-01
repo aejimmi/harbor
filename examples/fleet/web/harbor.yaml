@@ -1,0 +1,26 @@
+# Fleet role "web". server.name is overridden per instance (web-<fleet>-<n>).
+name: web
+
+server:
+  name: web
+  type: cax11
+  location: nbg1
+  ssh_key: my-key
+
+setup:
+  packages: [build-essential, ca-certificates, curl, git]
+  components:
+    rust: { enabled: true }
+    caddy: { enabled: true }
+
+  services:
+    - { name: web, enabled: true, start: true, exec_start: /usr/local/bin/web, restart: always }
+    - { name: caddy, enabled: true, start: true }
+
+  deploys:
+    web:
+      repo: github.com/you/myapp
+      steps: [cargo build --release -p web]
+      binary: target/release/web
+      install: /usr/local/bin/web
+      services: [web]

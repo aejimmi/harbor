@@ -1,0 +1,55 @@
+# Minimal Harbor config — one server, one Rust binary, behind Caddy.
+#
+# Copy to your repo root as harbor.yaml, then:
+#   harbor up            create, provision, deploy
+#   harbor deploy app    pull, build, swap symlink, restart
+#   harbor rollback app  swap back to the previous build
+#   harbor down          destroy server and DNS record
+
+name: myapp
+
+server:
+  name: myapp-prod
+  type: cax11              # Hetzner server type
+  location: nbg1
+  ssh_key: my-key          # name of an SSH key already uploaded to Hetzner
+  hostname: myapp          # optional: creates myapp.<dns.base_domain>
+
+setup:
+  packages: [build-essential, pkg-config, ca-certificates, curl, git]
+
+  components:
+    rust: { enabled: true }
+    caddy: { enabled: true }
+
+  system_user:
+    name: myapp
+    system: true
+    shell: /usr/sbin/nologin
+
+  services:
+    - name: myapp
+      enabled: true
+      start: true
+      user: myapp
+      exec_start: /usr/local/bin/myapp
+      restart: always
+    - { name: caddy, enabled: true, start: true }
+
+  deploys:
+    app:
+      repo: github.com/you/myapp
+      steps:
+        - cargo build --release
+      binary: target/release/myapp      # repo-relative build output
+      install: /usr/local/bin/myapp     # symlink Harbor keeps pointed at the active build
+      services: [myapp]                 # health-checked after deploy
+
+  security:
+    ssh_hardening: true
+    ufw:
+      enabled: true
+      rules:
+        - { port: 22, proto: tcp, limit: true }
+        - { port: 80, proto: tcp }
+        - { port: 443, proto: tcp }

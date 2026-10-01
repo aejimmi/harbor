@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{discover, output};
+use super::{deploy_cmd, discover, output};
 use crate::config::{self, UserConfig};
 use crate::dns::{self, DnsProvider};
 use crate::provider::CloudProvider;
@@ -17,21 +17,23 @@ pub async fn run(debug: bool, config_path: Option<&Path>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no 'server:' section in harbor.yaml"))?;
 
     let user_config = UserConfig::load(config_path).context("loading user config")?;
-    anyhow::ensure!(
-        !user_config.hetzner.token.is_empty(),
-        "hetzner.token is required"
-    );
+    // Fail fast when `backup:` is declared without matching creds —
+    // matches the existing `hetzner.token is required` pattern
+    // (spec 014 R2).
+    config::require_backup_creds(&setup_config, &user_config)?;
 
     let config_dir = yaml_path.parent().unwrap_or(Path::new("."));
+    let backup_creds = user_config.backup.for_project(&setup_config.name);
     let setup_script = ScriptBuilder::from_setup_config(
         &setup_config,
         user_config.github.token_for(&setup_config.name),
         config_dir,
+        backup_creds,
     )
     .context("building setup script")?
     .build();
 
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
+    let provider = super::remote::hetzner_provider(&user_config)?;
     let spec = config::ServerSpec {
         name: server.name.clone(),
         server_type: server.r#type.clone(),
@@ -88,5 +90,20 @@ pub async fn run(debug: bool, config_path: Option<&Path>) -> Result<()> {
     }
 
     spinner.success(format!("{} is up ({ip})", server.name));
+
+    // Provisioning is done; run every configured deploy sequentially (alphabetical,
+    // fail-fast) so `harbor up` leaves a fully-deployed server. Empty `deploys:`
+    // skips this step silently. Same path as `harbor deploy --all`, reusing the
+    // config and IP already in hand instead of looking the server up again.
+    if !setup_config.setup.deploys.is_empty() {
+        let resolved = super::remote::ResolvedServer {
+            name: server.name.clone(),
+            ip,
+            config: setup_config,
+        };
+        let names = deploy_cmd::sorted_names(&resolved.config);
+        deploy_cmd::run_all(&resolved, &names, debug).await?;
+    }
+
     Ok(())
 }

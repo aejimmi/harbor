@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use serde::de::DeserializeOwned;
 
 use super::ConfigError;
 
@@ -13,19 +15,23 @@ pub fn default_config_path() -> Result<PathBuf, ConfigError> {
     Ok(harbor_dir()?.join("config.yaml"))
 }
 
-/// Returns the default server profile config path
-/// (`~/.harbor/configs-server/server-profile.yaml`).
-pub fn default_server_config_path() -> Result<PathBuf, ConfigError> {
-    Ok(harbor_dir()?
-        .join("configs-server")
-        .join("server-profile.yaml"))
-}
-
-/// Returns the deploy config path for a given environment name
-/// (`~/.harbor/configs-deploy/{env}.yaml`).
-#[allow(dead_code)]
-pub fn deploy_config_path(env: &str) -> Result<PathBuf, ConfigError> {
-    Ok(harbor_dir()?
-        .join("configs-deploy")
-        .join(format!("{env}.yaml")))
+/// Read and parse a YAML file. A missing file is `NotFound` (so callers
+/// can suggest `harbor init` or a path fix); other IO errors are
+/// `ReadFailed`.
+pub(crate) fn load_yaml<T: DeserializeOwned>(path: &Path) -> Result<T, ConfigError> {
+    let shown = || path.display().to_string();
+    let data = std::fs::read_to_string(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ConfigError::NotFound { path: shown() }
+        } else {
+            ConfigError::ReadFailed {
+                path: shown(),
+                source: e,
+            }
+        }
+    })?;
+    serde_yaml::from_str(&data).map_err(|e| ConfigError::ParseFailed {
+        path: shown(),
+        source: e,
+    })
 }

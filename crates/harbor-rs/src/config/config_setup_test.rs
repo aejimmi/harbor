@@ -1,7 +1,6 @@
 #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::panic)]
 
 use super::*;
-
 use std::fs;
 use tempfile::TempDir;
 
@@ -44,7 +43,7 @@ fn test_user_config_defaults() {
     fs::write(&path, "hetzner:\n  token: abc\n").expect("write");
 
     let config = UserConfig::load(Some(&path)).expect("load");
-    assert_eq!(config.dns.base_domain, ".i.usercanal.com");
+    assert!(config.dns.base_domain.is_empty());
     assert_eq!(config.dns.provider, "cloudflare");
     assert!(config.cloudflare.api_token.is_empty());
     assert!(config.github.tokens.is_empty());
@@ -57,68 +56,6 @@ fn test_user_config_missing_file() {
 
     let err = UserConfig::load(Some(&path)).unwrap_err();
     assert!(matches!(err, ConfigError::NotFound { .. }));
-}
-
-#[test]
-fn test_deploy_config_load_valid() {
-    let dir = TempDir::new().expect("tempdir");
-    let path = dir.path().join("deploy.yaml");
-    fs::write(
-        &path,
-        r#"
-hcloud:
-  token: "deploy-token"
-  ssh_key: "mykey"
-servers:
-  - name: "app-prod-01"
-    type: "cpx31"
-    location: "nbg1"
-    image: "ubuntu-24.04"
-  - name: "app-prod-02"
-    type: "cpx31"
-    location: "fsn1"
-    image: "ubuntu-24.04"
-"#,
-    )
-    .expect("write");
-
-    let config = DeployConfig::load(&path).expect("load");
-    assert_eq!(config.hcloud.token, "deploy-token");
-    assert_eq!(config.hcloud.ssh_key, "mykey");
-    assert_eq!(config.servers.len(), 2);
-    assert_eq!(config.servers[0].name, "app-prod-01");
-    assert_eq!(config.servers[0].server_type, "cpx31");
-    assert_eq!(config.servers[1].location, "fsn1");
-}
-
-#[test]
-fn test_deploy_config_resolve_token_from_deploy() {
-    let dir = TempDir::new().expect("tempdir");
-    let path = dir.path().join("deploy.yaml");
-    fs::write(
-        &path,
-        "hcloud:\n  token: direct-token\n  ssh_key: k\nservers: []\n",
-    )
-    .expect("write");
-
-    let mut config = DeployConfig::load(&path).expect("load");
-    config.resolve_token(None);
-    assert_eq!(config.hcloud.token, "direct-token");
-}
-
-#[test]
-fn test_deploy_config_resolve_token_fallback_to_user() {
-    let dir = TempDir::new().expect("tempdir");
-    let path = dir.path().join("deploy.yaml");
-    fs::write(&path, "hcloud:\n  token: \"\"\n  ssh_key: k\nservers: []\n").expect("write");
-
-    let user_path = dir.path().join("user.yaml");
-    fs::write(&user_path, "hetzner:\n  token: user-token\n").expect("write");
-
-    let user_config = UserConfig::load(Some(&user_path)).expect("load");
-    let mut config = DeployConfig::load(&path).expect("load");
-    config.resolve_token(Some(&user_config));
-    assert_eq!(config.hcloud.token, "user-token");
 }
 
 #[test]
@@ -208,48 +145,6 @@ fn test_setup_config_defaults_for_missing_fields() {
 }
 
 #[test]
-fn test_init_harbor_config_creates_structure() {
-    let dir = TempDir::new().expect("tempdir");
-    let harbor = dir.path().join(".harbor");
-
-    // Temporarily override harbor_dir by testing the write_template logic directly.
-    // We test init_harbor_config indirectly by verifying the template constants parse.
-    std::fs::create_dir_all(harbor.join("configs-deploy")).expect("mkdir");
-    std::fs::create_dir_all(harbor.join("configs-server")).expect("mkdir");
-
-    // Verify all templates are valid YAML that parses into the right types.
-    let _: UserConfig = serde_yaml::from_str(
-        r#"
-cloudflare:
-  api_token: "test"
-  zone_id: "test"
-hetzner:
-  token: "test"
-dns:
-  base_domain: ".test.com"
-  provider: "cloudflare"
-github:
-  token: "test"
-"#,
-    )
-    .expect("user config template parses");
-
-    let _: DeployConfig = serde_yaml::from_str(
-        r#"
-hcloud:
-  token: ""
-  ssh_key: "production-key"
-servers:
-  - name: "app-prod-01"
-    type: "cpx31"
-    location: "nbg1"
-    image: "ubuntu-24.04"
-"#,
-    )
-    .expect("deploy config template parses");
-}
-
-#[test]
 fn test_path_mode_deserialization() {
     let prepend: PathMode = serde_yaml::from_str("\"prepend\"").expect("prepend");
     let append: PathMode = serde_yaml::from_str("\"append\"").expect("append");
@@ -258,23 +153,6 @@ fn test_path_mode_deserialization() {
     assert_eq!(prepend, PathMode::Prepend);
     assert_eq!(append, PathMode::Append);
     assert_eq!(overwrite, PathMode::Overwrite);
-}
-
-#[test]
-fn test_github_repo_deserialization() {
-    let yaml = r#"
-repo: "github.com/user/project"
-binary: "mybin"
-install_path: "/usr/local/bin"
-config_source: "configs/app.yaml"
-config_target: "/etc/app/app.yaml"
-"#;
-    let repo: GithubRepo = serde_yaml::from_str(yaml).expect("parse");
-    assert_eq!(repo.repo, "github.com/user/project");
-    assert_eq!(repo.binary, "mybin");
-    assert_eq!(repo.install_path, "/usr/local/bin");
-    assert_eq!(repo.config_source, "configs/app.yaml");
-    assert_eq!(repo.config_target, "/etc/app/app.yaml");
 }
 
 #[test]
@@ -300,37 +178,6 @@ fn test_setup_config_invalid_yaml_returns_parse_error() {
 }
 
 #[test]
-fn test_setup_config_github_repos_nested_parse() {
-    let dir = TempDir::new().expect("tempdir");
-    let path = dir.path().join("repos.yaml");
-    fs::write(
-        &path,
-        r#"
-setup:
-  github_repos:
-    - repo: "github.com/org/project/cmd/server"
-      binary: "server"
-      install_path: "/usr/local/bin"
-      config_source: "configs/prod.yaml"
-      config_target: "/etc/app/config.yaml"
-    - repo: "github.com/org/other"
-      binary: "other"
-"#,
-    )
-    .expect("write");
-
-    let config = SetupConfig::load(&path).expect("load");
-    assert_eq!(config.setup.github_repos.len(), 2);
-    assert_eq!(
-        config.setup.github_repos[0].repo,
-        "github.com/org/project/cmd/server"
-    );
-    assert_eq!(config.setup.github_repos[0].binary, "server");
-    assert_eq!(config.setup.github_repos[1].binary, "other");
-    assert!(config.setup.github_repos[1].install_path.is_empty());
-}
-
-#[test]
 fn test_user_config_invalid_yaml_returns_parse_error() {
     let dir = TempDir::new().expect("tempdir");
     let path = dir.path().join("bad.yaml");
@@ -338,15 +185,6 @@ fn test_user_config_invalid_yaml_returns_parse_error() {
 
     let err = UserConfig::load(Some(&path)).unwrap_err();
     assert!(matches!(err, ConfigError::ParseFailed { .. }));
-}
-
-#[test]
-fn test_deploy_config_missing_file_returns_not_found() {
-    let dir = TempDir::new().expect("tempdir");
-    let path = dir.path().join("nonexistent.yaml");
-
-    let err = DeployConfig::load(&path).unwrap_err();
-    assert!(matches!(err, ConfigError::NotFound { .. }));
 }
 
 // --- Container service parse tests (spec 007) ---
@@ -462,8 +300,12 @@ setup:
       exec_start: "/usr/local/bin/nginx"
 "#;
     let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
-    let result =
-        crate::script::ScriptBuilder::from_setup_config(&config, "", std::path::Path::new("."));
+    let result = crate::script::ScriptBuilder::from_setup_config(
+        &config,
+        "",
+        std::path::Path::new("."),
+        None,
+    );
     let Err(err) = result else {
         panic!("expected Err for image + exec_start conflict, got Ok");
     };
@@ -485,8 +327,12 @@ setup:
       image: ""
 "#;
     let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
-    let result =
-        crate::script::ScriptBuilder::from_setup_config(&config, "", std::path::Path::new("."));
+    let result = crate::script::ScriptBuilder::from_setup_config(
+        &config,
+        "",
+        std::path::Path::new("."),
+        None,
+    );
     let Err(err) = result else {
         panic!("expected Err for empty-string image, got Ok");
     };
@@ -508,8 +354,12 @@ setup:
       image: "   "
 "#;
     let config: SetupConfig = serde_yaml::from_str(yaml).expect("parse");
-    let result =
-        crate::script::ScriptBuilder::from_setup_config(&config, "", std::path::Path::new("."));
+    let result = crate::script::ScriptBuilder::from_setup_config(
+        &config,
+        "",
+        std::path::Path::new("."),
+        None,
+    );
     assert!(
         result.is_err(),
         "whitespace-only image should be rejected like empty string"
@@ -517,46 +367,9 @@ setup:
 }
 
 #[test]
-fn test_service_spec_debug_redacts_env() {
-    let mut env = std::collections::BTreeMap::new();
-    env.insert("DB_PASSWORD".to_owned(), "hunter2".to_owned());
-    env.insert("API_KEY".to_owned(), "s3cr3t".to_owned());
-    let svc = ServiceSpec {
-        name: "web".to_owned(),
-        enabled: true,
-        start: true,
-        user: String::new(),
-        working_directory: String::new(),
-        exec_start: String::new(),
-        restart: String::new(),
-        restart_sec: 0,
-        image: Some("nginx:latest".to_owned()),
-        runtime: ContainerRuntime::Docker,
-        ports: Vec::new(),
-        volumes: Vec::new(),
-        env,
-    };
-    let rendered = format!("{svc:?}");
-    // The secret values must not surface.
-    assert!(
-        !rendered.contains("hunter2"),
-        "Debug output leaked env value: {rendered}"
-    );
-    assert!(
-        !rendered.contains("s3cr3t"),
-        "Debug output leaked env value: {rendered}"
-    );
-    // The key count is surfaced along with a redaction marker so
-    // reviewers know the field is deliberately hidden.
-    assert!(
-        rendered.contains("redacted"),
-        "Debug output must show a redaction marker: {rendered}"
-    );
-    assert!(
-        rendered.contains("2 keys"),
-        "Debug output must show env key count: {rendered}"
-    );
-    // The non-secret fields are still readable.
-    assert!(rendered.contains("web"), "name must still render");
-    assert!(rendered.contains("nginx:latest"), "image must still render");
+fn test_default_config_template_parses_with_no_dns() {
+    let config: UserConfig =
+        serde_yaml::from_str(super::templates::DEFAULT_CONFIG).expect("template parses");
+    assert!(config.hetzner.token.is_empty());
+    assert!(!crate::dns::is_configured(&config));
 }

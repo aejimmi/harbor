@@ -49,6 +49,11 @@ impl ScriptComponent for UfwComponent {
             }
         }
 
+        // Never enable a default-deny firewall without SSH — that would
+        // lock harbor (and everyone else) out of the server for good.
+        if !self.rules.iter().any(|r| r.port == 22) {
+            lines.push("ufw limit 22/tcp".to_owned());
+        }
         lines.push("ufw --force enable".to_owned());
         lines
     }

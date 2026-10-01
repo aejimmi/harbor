@@ -2,33 +2,15 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{discover, output};
-use crate::config::UserConfig;
-use crate::provider::CloudProvider;
+use super::{output, remote};
 
 pub async fn run(config_path: Option<&Path>) -> Result<()> {
-    let (setup_config, _) = discover::load_project_config()?;
-    let server = setup_config
-        .server
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no 'server:' section in harbor.yaml"))?;
-
-    let user_config = UserConfig::load(config_path).context("loading user config")?;
-    let provider = crate::provider::hetzner::HetznerProvider::new(&user_config.hetzner.token);
-
-    let existing = provider
-        .get_server(&server.name)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("server '{}' not found", server.name))?;
-    let ip = existing
-        .ip
-        .ok_or_else(|| anyhow::anyhow!("server '{}' has no IP", server.name))?;
+    let server = remote::resolve_server(config_path).await?;
+    let ip = server.ip;
 
     output::info(&format!("Connecting to {} ({})", server.name, ip));
 
-    let status = std::process::Command::new("ssh")
-        .args(["-o", "StrictHostKeyChecking=accept-new"])
-        .arg(format!("root@{ip}"))
+    let status = remote::ssh_command(ip)
         .status()
         .context("failed to launch ssh")?;
 

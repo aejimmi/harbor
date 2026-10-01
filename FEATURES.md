@@ -32,6 +32,24 @@
 - Health checks — after deploy and rollback, each started service is verified with `systemctl is-active`; failures dump recent journal logs and abort.
 - Exec command — `harbor exec -- <cmd>` runs a one-off command on the server over SSH.
 - Debug mode — `--debug` on `up`, `deploy`, and `rollback` streams raw remote output instead of the spinner.
+- Deploy config validation — deploy names restricted to `[A-Za-z0-9_-]`, `binary:` must be repo-relative with no `..`, `install:` must be absolute, all checked at config load.
+
+## Backups
+
+- Declarative backup — `backup:` block in `harbor.yaml` archives configured paths on a timer, uploads to S3-compatible storage, and prunes old archives.
+- Schedule — `hourly`, `daily`, or `weekly` systemd timer with a randomized 1-hour delay.
+- S3-compatible destinations — `s3://<bucket>[/<prefix>]` URIs over HTTPS endpoints (e.g. Cloudflare R2).
+- Transport choice — `rc` (default, pure-Rust, pinned version) or `rclone` (upstream install script), selected per project.
+- On-demand backup — `harbor backup` triggers the oneshot backup service immediately and reports its result.
+- Backup listing — `harbor backup list` shows archives in the remote bucket, newest first, filtered to the project's strict key pattern.
+- Retention — archives older than `retention_days` (default 14) are pruned after each successful upload.
+- Service-aware archiving — `stop_services` are stopped before archiving and restarted in reverse order afterward; a failed stop triggers best-effort restart rollback.
+- Restore — `harbor restore [--at <timestamp>]` replaces live data from a backup; newest archive is used when `--at` is omitted.
+- Restore pre-flight — archive, services, and paths are printed before prompting; `tar tzf` verifies archive integrity before any live path is touched.
+- Atomic swap on restore — each live path is moved aside as `.old-<timestamp>` and replaced with restored content, with best-effort rollback on extract failure.
+- Confirmation prompt — restore asks for explicit confirmation; `--yes` skips the prompt for scripted flows.
+- Credential isolation — S3 keys written to `/etc/harbor/backup.env` with 0600 root-owned permissions; secret access keys redacted from debug output and panic messages.
+- Backup config validation — destination shape, https-only endpoint, absolute paths without `..`, retention ≥ 1, and `stop_services` cross-referenced to declared services, all checked at config load.
 
 ## SSH Provisioning
 
@@ -40,9 +58,11 @@
 - Connection retry — retries SSH connections up to 30 times with 10-second delays for freshly booted servers.
 - SSH keepalive — sends keepalive every 30 seconds with 10 allowed misses, preventing timeouts during long silent builds.
 - Ticking spinner — live progress indicator with elapsed time that advances on harbor's own status lines and ignores unrelated apt or dpkg chatter.
+- Spinner line truncation — long status lines are trimmed to terminal width so progress never wraps onto a new line.
 - Server-side logging — setup output is tee'd to `/var/log/setup-<name>.log` on the remote server.
-- Known hosts cleanup — automatically removes server IPs from `~/.ssh/known_hosts` on deletion.
-- Accept new host keys — `ssh`, `exec`, `logs`, and `status` use `StrictHostKeyChecking=accept-new` to auto-trust fresh servers on first connection.
+- Pinned host keys — server host keys are saved to `~/.harbor/known_hosts` on first connect; later connections reject a mismatched key (possible MITM or re-created server).
+- Known hosts cleanup — automatically removes server IPs from `~/.ssh/known_hosts` and `~/.harbor/known_hosts` on deletion.
+- Accept new host keys — `ssh`, `exec`, `logs`, `status`, `backup`, and `restore` use `StrictHostKeyChecking=accept-new` to auto-trust fresh servers on first connection.
 
 ## Setup Script Generation
 
@@ -62,16 +82,20 @@
 - Environment variables — exports variables to `/etc/environment`.
 - PATH configuration — prepend, append, or overwrite system PATH entries.
 - File deployment — copies local config files to the server with specified owner, group, and permissions.
-- GitHub repo cloning — clones, builds, and installs Go binaries from GitHub repos using fine-grained tokens via `x-access-token` HTTPS auth.
 - Systemd services — generates, enables, and restarts systemd units so config changes apply on redeploy.
 - Container services via Docker — run any OCI image as a managed service by setting image on a service spec; Harbor handles pull, run, and systemd lifecycle.
 - Container services via Podman — opt-in daemonless runtime selected with runtime: podman, rendered as Quadlet .container files under /etc/containers/systemd/.
 - Container env files — per-service env vars written to /etc/harbor/env/<name>.env with 0600 perms instead of inline in world-readable unit files.
 - Container runtime auto-install — Docker or Podman installed automatically based on which runtimes the config references; nothing installed if no service declares an image.
 - Container config validation — services mixing image and exec_start, or declaring empty image, are rejected at config load with clear errors.
+- Container capability controls — per-service `cap_drop` and `cap_add` shape the Linux capabilities allowed inside the container.
+- Container read-only root — opt-in `read_only: true` renders a container with a read-only rootfs and an automatic 64 MB writable `/tmp` tmpfs.
+- Container PID limit — per-service `pids_limit` caps the number of processes inside the container (default 256, `0` disables).
+- Service env secret redaction — service environment values are redacted from debug output and panic messages so secrets never reach trace logs.
 - UFW firewall — enables UFW and opens specified ports, with optional rate limiting per rule.
 - SSH hardening — disables password auth, root login, and enforces key-only access.
 - Kernel hardening — applies sysctl security settings for network and memory protection.
+- Mount hardening — `/tmp`, `/var/tmp`, and `/dev/shm` are mounted with `noexec,nosuid,nodev` to block binary execution from world-writable directories.
 - System updates — optional unattended upgrades, kernel upgrades, and automatic reboot.
 - Hostname configuration — sets server hostname.
 - Timezone configuration — sets system timezone.
@@ -87,9 +111,10 @@
 
 ## Configuration
 
-- Init scaffolding — `harbor init` creates `~/.harbor/` with template configs for credentials, deploys, and server setup.
+- Init scaffolding — `harbor init` creates `~/.harbor/config.yaml` (mode 0600) with the Hetzner token and commented optional sections for DNS, GitHub tokens, and backup credentials.
 - Credential config — centralized Hetzner, Cloudflare, and GitHub tokens in `~/.harbor/config.yaml`.
 - Per-project GitHub tokens — `github.tokens.<project-name>` maps fine-grained tokens to projects so each deploy uses the right credentials.
+- Per-project backup credentials — `backup.projects.<project-name>` maps S3-compatible access keys to projects, mirroring the GitHub token layout.
 - Token fallback chain — Hetzner token resolves from user config, then `HCLOUD_TOKEN` env var.
 - Fleet configs — `fleet.yaml` composes role directories into named server groups; each role has its own `harbor.yaml`.
 - Setup configs — YAML files defining the full provisioning recipe.
@@ -102,7 +127,7 @@
 - Colored output — styled terminal output with color-coded success, error, info, and header messages.
 - Quiet mode — `--quiet` flag suppresses non-essential output.
 - Debug mode — `--debug` flag shows verbose SSH output and internal diagnostics.
-- Status command — `harbor status` shows server type, location, IP, last deploy SHA, service health, uptime, and disk usage.
+- Status command — `harbor status` shows server type, location, IP, last deploy SHA, service health, uptime, disk usage, and (when configured) the backup timer's active state, last trigger, and next fire time.
 - Logs command — `harbor logs [service]` streams journald logs from the server.
 - SSH shell — `harbor ssh` opens an interactive shell on the configured server.
 - Graceful interrupt — Ctrl+C triggers clean shutdown instead of abrupt termination.
