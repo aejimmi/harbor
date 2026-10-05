@@ -157,7 +157,7 @@ fn versioned_dir_count(install_root: &Path, name: &str) -> usize {
     let dir = install_root.join(name);
     match std::fs::read_dir(&dir) {
         Ok(entries) => entries
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
             .count(),
         Err(_) => 0,
@@ -343,7 +343,7 @@ fn test_rollback_to_missing_sha_exits_nonzero_without_changing_symlink() {
     let fake_home = tempfile::TempDir::new().unwrap();
     let install_root = tempfile::TempDir::new().unwrap();
     let install_link = install_root.path().join("web-link");
-    let (bare, sha1) = make_origin(tmp.path(), "1.0");
+    let (bare, _sha1) = make_origin(tmp.path(), "1.0");
 
     let (s1, o1) = run_script(
         fake_home.path(),
