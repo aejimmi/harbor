@@ -42,6 +42,13 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
         }
     }
 
+    for vol in &server.volumes {
+        output::info(&format!(
+            "Volume {} kept (detached) — delete with `hcloud volume delete {}`",
+            vol.name, vol.name
+        ));
+    }
+
     output::success(&format!("{} is down", server.name));
     Ok(())
 }

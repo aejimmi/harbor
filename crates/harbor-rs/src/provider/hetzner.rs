@@ -5,8 +5,8 @@ use hcloud::apis::configuration::Configuration;
 use hcloud::apis::{servers_api, ssh_keys_api};
 use hcloud::models;
 
-use super::{ProviderError, Server, ServerStatus};
-use crate::config::ServerSpec;
+use super::{AttachedVolume, ProviderError, Server, ServerStatus};
+use crate::config::{ServerSpec, VolumeSpec};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_POLL_ATTEMPTS: u32 = 60;
@@ -22,6 +22,11 @@ impl HetznerProvider {
         let mut config = Configuration::new();
         config.bearer_access_token = Some(token.to_owned());
         Self { config }
+    }
+
+    /// API configuration shared with the volume helpers.
+    pub(super) fn config(&self) -> &Configuration {
+        &self.config
     }
 }
 
@@ -139,6 +144,23 @@ impl super::CloudProvider for HetznerProvider {
 
         Ok(resp.servers.first().map(convert_server))
     }
+
+    async fn ensure_volume(
+        &self,
+        spec: &VolumeSpec,
+        server: &Server,
+    ) -> Result<AttachedVolume, ProviderError> {
+        self.ensure_volume_impl(spec, server).await
+    }
+
+    async fn check_volume(
+        &self,
+        spec: &VolumeSpec,
+        location: &str,
+        server_id: Option<i64>,
+    ) -> Result<(), ProviderError> {
+        self.check_volume_impl(spec, location, server_id).await
+    }
 }
 
 impl HetznerProvider {
@@ -190,7 +212,7 @@ fn convert_server(s: &models::Server) -> Server {
         models::server::Status::Unknown => ServerStatus::Unknown,
     };
 
-    let location = s.datacenter.location.name.clone();
+    let location = s.location.name.clone();
     let server_type = s.server_type.name.clone();
 
     Server {

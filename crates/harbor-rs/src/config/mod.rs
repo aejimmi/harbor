@@ -5,6 +5,7 @@ pub mod setup;
 mod setup_backup;
 mod setup_service;
 mod setup_validate;
+mod setup_volume;
 mod templates;
 mod user;
 
@@ -24,6 +25,8 @@ mod examples_test;
 mod fleet_test;
 #[cfg(test)]
 mod setup_validate_test;
+#[cfg(test)]
+mod setup_volume_test;
 
 pub use deploy::ServerSpec;
 #[allow(unused_imports)]
@@ -32,7 +35,7 @@ pub use paths::{default_config_path, harbor_dir};
 #[allow(unused_imports)]
 pub use setup::{
     BackupConfig, BackupSchedule, BackupTransport, ContainerRuntime, DirectorySpec, PathMode,
-    ServiceSpec, SetupConfig, UfwRule,
+    ServiceSpec, SetupConfig, UfwRule, VolumeFormat, VolumeSpec,
 };
 pub use templates::init_harbor_config;
 // Re-exported for programmatic UserConfig construction (used in tests and future API consumers).

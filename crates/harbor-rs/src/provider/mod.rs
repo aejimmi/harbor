@@ -1,4 +1,5 @@
 pub mod hetzner;
+mod hetzner_volume;
 
 #[cfg(test)]
 mod provider_test;
@@ -7,7 +8,7 @@ use std::net::IpAddr;
 
 use async_trait::async_trait;
 
-use crate::config::ServerSpec;
+use crate::config::{ServerSpec, VolumeSpec};
 
 /// A server managed by a cloud provider.
 #[derive(Debug, Clone)]
@@ -33,6 +34,17 @@ pub enum ServerStatus {
     Migrating,
     Rebuilding,
     Unknown,
+}
+
+/// A block volume attached to a server, ready to be mounted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachedVolume {
+    pub name: String,
+    /// Stable device path on the server, e.g.
+    /// `/dev/disk/by-id/scsi-0HC_Volume_123`.
+    pub linux_device: String,
+    /// `true` when harbor created the volume on this run.
+    pub created: bool,
 }
 
 /// Errors from cloud provider operations.
@@ -69,4 +81,23 @@ pub trait CloudProvider: Send + Sync {
 
     /// Get a server by name. Returns `None` if not found.
     async fn get_server(&self, name: &str) -> Result<Option<Server>, ProviderError>;
+
+    /// Create the volume attached to `server`, or reuse the existing
+    /// volume of that name — attaching it when detached. Fails when
+    /// the volume lives in another location or is attached elsewhere.
+    async fn ensure_volume(
+        &self,
+        spec: &VolumeSpec,
+        server: &Server,
+    ) -> Result<AttachedVolume, ProviderError>;
+
+    /// Fail if an existing volume of that name could not be used by a
+    /// server in `location` with id `server_id` (`None` if the server
+    /// does not exist yet). Lets `harbor up` refuse before paying for one.
+    async fn check_volume(
+        &self,
+        spec: &VolumeSpec,
+        location: &str,
+        server_id: Option<i64>,
+    ) -> Result<(), ProviderError>;
 }

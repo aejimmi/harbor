@@ -8,6 +8,9 @@
 - Idempotent creation — if a server with the same name already exists and is running, reuses it instead of failing.
 - SSH key validation — verifies the named SSH key exists in Hetzner before attempting server creation.
 - Status polling — waits for newly created servers to reach running status before proceeding (5s intervals, up to 5 minutes).
+- Block volumes — `server.volumes:` creates a Hetzner volume attached to the server, or reattaches an existing one with the same name; `harbor down` detaches and keeps it.
+- Volume preflight — a volume in another location or attached to another server is refused before any server is created.
+- Volume mounts — formatted only when blank (ext4 default, xfs optional), mounted by UUID with `nofail` before directories, files, and services are set up.
 
 ## Fleet Management
 
@@ -99,6 +102,7 @@
 - System updates — optional unattended upgrades, kernel upgrades, and automatic reboot.
 - Hostname configuration — sets server hostname.
 - Timezone configuration — sets system timezone.
+- Journal cap — `system.journald_max_use` sets journald `SystemMaxUse` so logs can't fill the root disk.
 - Dry run — `harbor generate` prints the generated script without executing it.
 
 ## DNS Integration
@@ -127,7 +131,7 @@
 - Colored output — styled terminal output with color-coded success, error, info, and header messages.
 - Quiet mode — `--quiet` flag suppresses non-essential output.
 - Debug mode — `--debug` flag shows verbose SSH output and internal diagnostics.
-- Status command — `harbor status` shows server type, location, IP, last deploy SHA, service health, uptime, disk usage, and (when configured) the backup timer's active state, last trigger, and next fire time.
+- Status command — `harbor status` shows server type, location, IP, last deploy SHA, service health, uptime, disk usage, volume usage (or NOT MOUNTED), and (when configured) the backup timer's active state, last trigger, and next fire time.
 - Logs command — `harbor logs [service]` streams journald logs from the server.
 - SSH shell — `harbor ssh` opens an interactive shell on the configured server.
 - Graceful interrupt — Ctrl+C triggers clean shutdown instead of abrupt termination.

@@ -47,6 +47,22 @@ harbor rollback app              # back to the previous build, no rebuild
 harbor down                      # destroy server and DNS record
 ```
 
+## Volumes
+
+Keep data off the root disk with a Hetzner volume:
+
+```yaml
+server:
+  volumes:
+    - { name: myapp-data, size: 50, mount: /opt/myapp }   # format: ext4 (default) | xfs
+
+setup:
+  system:
+    journald_max_use: 1G     # cap the journal on the root disk
+```
+
+`harbor up` creates the volume, or reattaches an existing one with that name, and mounts it by UUID with `nofail` before any directories, files or services are set up. A volume that already has a filesystem is never reformatted. `harbor down` detaches the volume and keeps it, and `harbor status` shows its usage. Volumes work with `harbor up` only, not fleets.
+
 More configs — container services, backups, fleets — are in [`examples/`](examples/).
 
 ## Fleet

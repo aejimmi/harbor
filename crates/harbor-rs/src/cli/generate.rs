@@ -27,6 +27,16 @@ pub fn run(
         None
     };
 
+    if setup_config
+        .server
+        .as_ref()
+        .is_some_and(|s| !s.volumes.is_empty())
+    {
+        tracing::warn!(
+            "server.volumes are not rendered — device paths exist only after `harbor up`"
+        );
+    }
+
     let config_dir = setup_config_path.parent().unwrap_or(Path::new("."));
     let mut builder =
         ScriptBuilder::from_setup_config(&setup_config, "", config_dir, backup_creds.as_ref())

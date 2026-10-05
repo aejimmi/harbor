@@ -49,7 +49,8 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
                     .backup
                     .as_ref()
                     .map(|_| setup_config.name.as_str());
-                fetch_app_state(ip, &services, backup_project);
+                let mounts: Vec<&str> = server.volumes.iter().map(|v| v.mount.as_str()).collect();
+                fetch_app_state(ip, &services, backup_project, &mounts);
             }
         }
         None => {
@@ -61,8 +62,15 @@ pub async fn run(config_path: Option<&Path>) -> Result<()> {
 }
 
 /// SSH into the server to gather app state (deploy version, services, uptime, disk).
-fn fetch_app_state(ip: std::net::IpAddr, services: &[&str], backup_project: Option<&str>) {
-    let script = build_status_script(services, backup_project);
+fn fetch_app_state(
+    ip: std::net::IpAddr,
+    services: &[&str],
+    backup_project: Option<&str>,
+    mounts: &[&str],
+) {
+    let mut script = build_status_script(services, backup_project);
+    script.push('\n');
+    script.push_str(&build_volume_status_script(mounts));
     let result = super::remote::ssh_exec_script(ip, &script);
 
     match result {
@@ -139,4 +147,18 @@ fi"#
     }
 
     parts.join("\n")
+}
+
+/// One `Volume:` line per declared mount — usage when mounted, a
+/// warning when the mount is missing. Empty for no volumes.
+pub(super) fn build_volume_status_script(mounts: &[&str]) -> String {
+    mounts
+        .iter()
+        .map(|m| {
+            format!(
+                r#"if mountpoint -q {m}; then echo "Volume:   {m} $(df -h {m} | awk 'NR==2{{print $3 "/" $2 " (" $5 " used)"}}')"; else echo "Volume:   {m} NOT MOUNTED"; fi"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

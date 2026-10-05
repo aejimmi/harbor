@@ -149,6 +149,13 @@ async fn up_single(fleet_server: &FleetServer, ctx: &FleetContext) -> Result<Ser
         .server
         .as_ref()
         .context("role harbor.yaml missing 'server:' section")?;
+    if !server_section.volumes.is_empty() {
+        bail!(
+            "role {}: server.volumes is not supported in fleets — one named volume \
+             cannot back N servers; use `harbor up` for a single node",
+            fleet_server.role_dir.display()
+        );
+    }
 
     // Check if server already exists (idempotent).
     if let Some(existing) = ctx.provider.get_server(&fleet_server.name).await? {

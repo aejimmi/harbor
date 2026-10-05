@@ -72,6 +72,13 @@ fn build_setup_script(setup_path: Option<&Path>, user_config: &UserConfig) -> Re
     };
     let setup_config = config::SetupConfig::load(&setup_path).context("loading setup config")?;
     config::require_backup_creds(&setup_config, user_config)?;
+    if setup_config
+        .server
+        .as_ref()
+        .is_some_and(|s| !s.volumes.is_empty())
+    {
+        anyhow::bail!("server.volumes is only handled by `harbor up` — run that instead");
+    }
     let config_dir = setup_path.parent().unwrap_or(Path::new("."));
     Ok(ScriptBuilder::from_setup_config(
         &setup_config,

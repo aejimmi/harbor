@@ -11,6 +11,7 @@ mod fish;
 mod git_auth;
 mod golang;
 mod hostname;
+mod journald;
 mod kernel_hardening;
 mod mount_hardening;
 mod packages;
@@ -25,6 +26,7 @@ mod swap;
 mod ufw;
 mod updates;
 mod user;
+mod volume;
 
 #[cfg(test)]
 mod script_backup_test;
@@ -50,6 +52,8 @@ mod script_services_podman_test;
 mod script_services_security_test;
 #[cfg(test)]
 mod script_test_helpers;
+#[cfg(test)]
+mod script_volume_test;
 
 #[allow(unused_imports)] // wired into from_setup_config by spec 014
 pub use backup::BackupComponent;
@@ -65,6 +69,7 @@ pub use fish::FishComponent;
 pub use git_auth::GitAuthComponent;
 pub use golang::GoComponent;
 pub use hostname::HostnameComponent;
+pub use journald::JournaldComponent;
 pub use kernel_hardening::KernelHardeningComponent;
 pub use mount_hardening::MountHardeningComponent;
 pub use packages::PackagesComponent;
@@ -81,6 +86,7 @@ pub use swap::SwapComponent;
 pub use ufw::UfwComponent;
 pub use updates::UpdatesComponent;
 pub use user::SystemUserComponent;
+pub use volume::{VolumeMount, VolumeMountComponent};
 
 use std::path::Path;
 
@@ -146,6 +152,14 @@ impl ScriptBuilder {
     /// Add a component to the script.
     pub fn add(&mut self, component: impl ScriptComponent + 'static) -> &mut Self {
         self.components.push(Box::new(component));
+        self
+    }
+
+    /// Put a component ahead of every other one — used for volume
+    /// mounts, which must exist before directories, files, and
+    /// services write beneath them.
+    pub fn prepend(&mut self, component: impl ScriptComponent + 'static) -> &mut Self {
+        self.components.insert(0, Box::new(component));
         self
     }
 
@@ -250,7 +264,7 @@ impl ScriptBuilder {
     }
 
     /// PATH, environment, system user, directories, container runtimes,
-    /// and timezone.
+    /// timezone, and the journald cap.
     fn add_system(&mut self, setup: &SetupSection) {
         if !setup.path.paths.is_empty() {
             self.add(PathComponent {
@@ -279,6 +293,11 @@ impl ScriptBuilder {
         if !setup.system.timezone.is_empty() {
             self.add(hostname::TimezoneComponent {
                 timezone: setup.system.timezone.clone(),
+            });
+        }
+        if !setup.system.journald_max_use.is_empty() {
+            self.add(JournaldComponent {
+                max_use: setup.system.journald_max_use.clone(),
             });
         }
     }

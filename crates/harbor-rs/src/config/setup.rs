@@ -6,6 +6,7 @@ use serde::Deserialize;
 use super::ConfigError;
 pub use super::setup_backup::{BackupConfig, BackupSchedule, BackupTransport};
 pub use super::setup_service::{ContainerRuntime, ServiceSpec};
+pub use super::setup_volume::{VolumeFormat, VolumeSpec};
 
 /// Server setup/provisioning configuration (`harbor.yaml`).
 #[derive(Debug, Deserialize)]
@@ -244,6 +245,10 @@ pub struct SystemConfig {
     #[allow(dead_code)]
     #[serde(default)]
     pub hostname_prefix: String,
+    /// Cap on the systemd journal's disk use (`SystemMaxUse=`), e.g.
+    /// `1G`. Empty leaves journald's default (10% of the filesystem).
+    #[serde(default)]
+    pub journald_max_use: String,
 }
 
 /// System update policies.
@@ -332,6 +337,10 @@ pub struct ServerSection {
     /// Hostname for DNS record.
     #[serde(default)]
     pub hostname: Option<String>,
+    /// Block volumes to create (or reuse by name), attach, and mount.
+    /// Only `harbor up` handles them; fleet roles must leave this empty.
+    #[serde(default)]
+    pub volumes: Vec<VolumeSpec>,
 }
 
 fn default_server_type() -> String {

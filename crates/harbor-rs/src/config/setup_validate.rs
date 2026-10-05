@@ -17,6 +17,7 @@
 //!   would inject extra lines into env files and heredocs)
 //! - `files:`/`directories:` paths that aren't plain absolute paths, and
 //!   modes/owners that aren't octal/safe names
+//! - `server.volumes` and `system.journald_max_use` — see `setup_volume`
 
 use super::setup::BackupConfig;
 use super::{ConfigError, SetupConfig};
@@ -28,6 +29,10 @@ pub(super) fn validate(config: &SetupConfig) -> Result<(), ConfigError> {
     validate_services(config)?;
     validate_env(config)?;
     validate_fs_entries(config)?;
+    if let Some(server) = &config.server {
+        super::setup_volume::validate_volumes(&server.volumes)?;
+    }
+    super::setup_volume::validate_journald_max_use(&config.setup.system.journald_max_use)?;
     for (name, deploy) in &config.setup.deploys {
         validate_deploy_name(name)?;
         validate_binary(name, &deploy.binary)?;

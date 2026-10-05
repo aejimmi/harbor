@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.0
+
+New:
+- volumes: server.volumes: attaches Hetzner volumes — harbor up creates one, or reattaches an existing one with the same name
+- volumes: formatted only when blank (ext4 default, xfs optional), mounted by UUID with nofail before any directories, files or services are set up
+- volumes: harbor down detaches and keeps the volume; harbor status shows usage, or NOT MOUNTED
+- volumes: a volume in another location or attached to another server is refused before any server is created
+- volumes: fleets and harbor server create refuse a config that declares volumes
+- system: system.journald_max_use: caps the journal on the root disk
+
+Fix:
+- up: harbor up no longer fails after creating the server — Hetzner dropped datacenter from server responses (hcloud 0.26)
+
 ## v0.3.0
 
 New:

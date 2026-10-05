@@ -6,7 +6,7 @@
 //! when present with the timer enabled, shape when present but
 //! the timer has never been enabled.
 
-use super::status_cmd::build_status_script;
+use super::status_cmd::{build_status_script, build_volume_status_script};
 
 #[test]
 fn test_status_without_backup_block_is_unchanged() {
@@ -66,4 +66,17 @@ fn test_status_single_script_string_for_one_ssh_call() {
     // and the backup block — confirming they share a render.
     assert!(script.contains("Services:"));
     assert!(script.contains("Backup:"));
+}
+
+#[test]
+fn test_volume_status_reports_usage_or_missing_mount() {
+    let script = build_volume_status_script(&["/opt/tell"]);
+    assert!(script.contains("if mountpoint -q /opt/tell; then"));
+    assert!(script.contains("df -h /opt/tell"));
+    assert!(script.contains("NOT MOUNTED"));
+}
+
+#[test]
+fn test_volume_status_empty_without_volumes() {
+    assert!(build_volume_status_script(&[]).is_empty());
 }
