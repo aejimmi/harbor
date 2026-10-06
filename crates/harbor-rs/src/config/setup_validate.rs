@@ -18,6 +18,7 @@
 //! - `files:`/`directories:` paths that aren't plain absolute paths, and
 //!   modes/owners that aren't octal/safe names
 //! - `server.volumes` and `system.journald_max_use` — see `setup_volume`
+//! - ufw rules whose `proto` isn't tcp/udp or whose `from` isn't an IP/CIDR
 
 use super::setup::BackupConfig;
 use super::{ConfigError, SetupConfig};
@@ -33,6 +34,7 @@ pub(super) fn validate(config: &SetupConfig) -> Result<(), ConfigError> {
         super::setup_volume::validate_volumes(&server.volumes)?;
     }
     super::setup_volume::validate_journald_max_use(&config.setup.system.journald_max_use)?;
+    validate_ufw_rules(config)?;
     for (name, deploy) in &config.setup.deploys {
         validate_deploy_name(name)?;
         validate_binary(name, &deploy.binary)?;
@@ -361,4 +363,40 @@ fn validate_stop_services(
         }
     }
     Ok(())
+}
+
+/// `proto` must be `tcp` or `udp`, and `from` an IP or CIDR — both are
+/// interpolated into `ufw` command lines.
+fn validate_ufw_rules(config: &SetupConfig) -> Result<(), ConfigError> {
+    for rule in &config.setup.security.ufw.rules {
+        if !matches!(rule.proto.as_str(), "tcp" | "udp") {
+            return Err(invalid(format!(
+                "ufw rule port {}: proto '{}' must be tcp or udp",
+                rule.port, rule.proto
+            )));
+        }
+        if let Some(from) = &rule.from
+            && !is_ip_or_cidr(from)
+        {
+            return Err(invalid(format!(
+                "ufw rule port {}: from '{from}' must be an IP address or CIDR",
+                rule.port
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `203.0.113.7`, `10.0.0.0/8`, `2001:db8::/48` — prefix within the
+/// address family's width.
+fn is_ip_or_cidr(value: &str) -> bool {
+    let (addr, prefix) = match value.split_once('/') {
+        Some((a, p)) => (a, Some(p)),
+        None => (value, None),
+    };
+    let Ok(ip) = addr.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    let max = if ip.is_ipv4() { 32 } else { 128 };
+    prefix.is_none_or(|p| p.parse::<u8>().is_ok_and(|n| n <= max))
 }

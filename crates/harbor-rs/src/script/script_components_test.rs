@@ -273,6 +273,7 @@ fn test_ufw_component_adds_ssh_when_missing() {
         port: 443,
         proto: "tcp".to_owned(),
         limit: false,
+        from: None,
     }];
     let lines = UfwComponent::from_config(&[], &rules).render();
     let ssh = lines.iter().position(|l| l == "ufw limit 22/tcp");
@@ -289,11 +290,13 @@ fn test_ufw_component_with_rules() {
                 port: 22,
                 proto: "tcp".to_owned(),
                 limit: true,
+                from: None,
             },
             UfwRule {
                 port: 443,
                 proto: "tcp".to_owned(),
                 limit: false,
+                from: None,
             },
         ],
     );
@@ -459,4 +462,32 @@ fn test_kernel_hardening_component() {
     assert!(lines.iter().any(|l| l.contains("sysctl --system")));
     assert!(lines.iter().any(|l| l.contains("disable-unused.conf")));
     assert!(lines.iter().any(|l| l.contains("hard core 0")));
+}
+
+#[test]
+fn test_ufw_rule_with_source_restricts_to_it() {
+    let rules = vec![UfwRule {
+        port: 50000,
+        proto: "tcp".to_owned(),
+        limit: false,
+        from: Some("148.251.183.125".to_owned()),
+    }];
+    let lines = UfwComponent::from_config(&[], &rules).render();
+    assert!(
+        lines.contains(&"ufw allow from 148.251.183.125 to any port 50000 proto tcp".to_owned()),
+        "{lines:#?}"
+    );
+    assert!(!lines.iter().any(|l| l == "ufw allow 50000/tcp"));
+}
+
+#[test]
+fn test_ufw_rule_with_source_and_limit() {
+    let rules = vec![UfwRule {
+        port: 22,
+        proto: "tcp".to_owned(),
+        limit: true,
+        from: Some("10.0.0.0/8".to_owned()),
+    }];
+    let lines = UfwComponent::from_config(&[], &rules).render();
+    assert!(lines.contains(&"ufw limit from 10.0.0.0/8 to any port 22 proto tcp".to_owned()));
 }

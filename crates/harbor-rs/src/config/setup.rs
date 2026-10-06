@@ -289,14 +289,20 @@ pub struct UfwConfig {
     pub rules: Vec<UfwRule>,
 }
 
-/// A single UFW firewall rule.
+/// A single UFW firewall rule. Unknown keys are an error: a misspelt
+/// `from:` silently ignored would open the port to every source.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UfwRule {
     pub port: u16,
     #[serde(default = "default_proto")]
     pub proto: String,
     #[serde(default)]
     pub limit: bool,
+    /// Only allow traffic from this source — an IP or CIDR such as
+    /// `203.0.113.7` or `2001:db8::/48`. Absent allows any source.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 fn default_proto() -> String {

@@ -18,6 +18,7 @@ impl UfwComponent {
                         port,
                         proto: "tcp".to_owned(),
                         limit: false,
+                        from: None,
                     })
                     .collect(),
             }
@@ -39,13 +40,11 @@ impl ScriptComponent for UfwComponent {
         ];
 
         for rule in &self.rules {
-            let port_proto = format!("{}/{}", rule.port, rule.proto);
+            let target = rule_target(rule);
+            lines.push(format!("ufw allow {target}"));
             if rule.limit {
                 // Rate limiting (e.g. SSH: 6 connections/30s per IP)
-                lines.push(format!("ufw allow {port_proto}"));
-                lines.push(format!("ufw limit {port_proto}"));
-            } else {
-                lines.push(format!("ufw allow {port_proto}"));
+                lines.push(format!("ufw limit {target}"));
             }
         }
 
@@ -56,5 +55,14 @@ impl ScriptComponent for UfwComponent {
         }
         lines.push("ufw --force enable".to_owned());
         lines
+    }
+}
+
+/// `22/tcp`, or `from 203.0.113.7 to any port 22 proto tcp` when the rule
+/// names a source. `from` and `proto` are validated at config load.
+fn rule_target(rule: &UfwRule) -> String {
+    match &rule.from {
+        Some(from) => format!("from {from} to any port {} proto {}", rule.port, rule.proto),
+        None => format!("{}/{}", rule.port, rule.proto),
     }
 }
