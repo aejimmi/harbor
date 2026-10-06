@@ -1,6 +1,7 @@
 mod backup_cmd;
 mod config;
 mod deploy_cmd;
+mod deploy_local;
 mod discover;
 mod down;
 mod exec_cmd;
@@ -28,6 +29,8 @@ mod cli_ops_test;
 mod deploy_bash_test;
 #[cfg(test)]
 mod deploy_cmd_test;
+#[cfg(test)]
+mod deploy_local_test;
 #[cfg(test)]
 mod generate_test;
 #[cfg(test)]
@@ -80,8 +83,12 @@ pub enum Commands {
         /// Name of the deploy entry in `harbor.yaml` under `deploys:`.
         name: Option<String>,
         /// Run every configured deploy sequentially (alphabetical order).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "binary")]
         all: bool,
+        /// Ship this locally built binary instead of pulling and building
+        /// on the server (must be a Linux ELF for the server's arch).
+        #[arg(long, value_name = "PATH", requires = "name")]
+        binary: Option<std::path::PathBuf>,
         #[arg(long)]
         debug: bool,
     },
@@ -347,9 +354,17 @@ pub async fn run(cli: Cli) -> Result<()> {
         // Orchestration
         Commands::Up { debug } => up::run(debug, cli.config.as_deref()).await,
         Commands::Down => down::run(cli.config.as_deref()).await,
-        Commands::Deploy { name, all, debug } => {
-            deploy_cmd::run(name, all, debug, cli.config.as_deref()).await
-        }
+        Commands::Deploy {
+            name,
+            all,
+            binary,
+            debug,
+        } => match (binary, name) {
+            (Some(path), Some(name)) => {
+                deploy_local::run(&name, &path, debug, cli.config.as_deref()).await
+            }
+            (_, name) => deploy_cmd::run(name, all, debug, cli.config.as_deref()).await,
+        },
         Commands::Rollback {
             name,
             version,

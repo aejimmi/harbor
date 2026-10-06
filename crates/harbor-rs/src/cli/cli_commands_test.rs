@@ -37,9 +37,15 @@ fn test_cli_down_parses() {
 fn test_cli_deploy_with_name_parses() {
     let cli = Cli::try_parse_from(["harbor", "deploy", "web"]).expect("parse deploy web");
     match cli.command {
-        Some(Commands::Deploy { name, all, debug }) => {
+        Some(Commands::Deploy {
+            name,
+            all,
+            binary,
+            debug,
+        }) => {
             assert_eq!(name.as_deref(), Some("web"));
             assert!(!all);
+            assert!(binary.is_none());
             assert!(!debug);
         }
         other => panic!("expected Deploy, got {other:?}"),
@@ -360,4 +366,23 @@ fn test_cli_no_args_shows_help() {
 fn test_cli_unknown_command_errors() {
     let result = Cli::try_parse_from(["harbor", "nonexistent"]);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_cli_deploy_binary_parses() {
+    let cli = Cli::try_parse_from(["harbor", "deploy", "tell", "--binary", "/tmp/tell"])
+        .expect("parse deploy --binary");
+    match cli.command {
+        Some(Commands::Deploy { name, binary, .. }) => {
+            assert_eq!(name.as_deref(), Some("tell"));
+            assert_eq!(binary.as_deref(), Some(std::path::Path::new("/tmp/tell")));
+        }
+        other => panic!("expected Deploy, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cli_deploy_binary_rejects_all_and_missing_name() {
+    assert!(Cli::try_parse_from(["harbor", "deploy", "--all", "--binary", "/tmp/x"]).is_err());
+    assert!(Cli::try_parse_from(["harbor", "deploy", "--binary", "/tmp/x"]).is_err());
 }

@@ -56,7 +56,7 @@ impl DeployComponent {
 
 /// Derive the trailing basename from a repo-relative `binary:` path.
 /// Used as the filename under `/opt/harbor/<name>/<sha>/<basename>`.
-fn basename(binary: &str) -> &str {
+pub(crate) fn basename(binary: &str) -> &str {
     Path::new(binary)
         .file_name()
         .and_then(|n| n.to_str())
@@ -89,16 +89,27 @@ fn clone_or_pull_lines(repo: &str) -> Vec<String> {
 /// Lines that preserve the built binary under the versioned dir and
 /// atomically swap the `install` symlink to point at it.
 fn preserve_and_swap_lines(name: &str, binary: &str, install: &str) -> Vec<String> {
-    let base = basename(binary);
+    let mut lines = vec!["SHA=$(git rev-parse HEAD)".to_owned()];
+    lines.extend(install_version_lines(
+        name,
+        binary,
+        basename(binary),
+        install,
+    ));
+    lines
+}
+
+/// Copy `source` to `$HARBOR_INSTALL_ROOT/<name>/$SHA/<base>` and swap the
+/// `install` symlink onto it. `$SHA` must already be set by the caller.
+fn install_version_lines(name: &str, source: &str, base: &str, install: &str) -> Vec<String> {
     vec![
-        "SHA=$(git rev-parse HEAD)".to_owned(),
         format!("VERSION_DIR=\"$HARBOR_INSTALL_ROOT/{name}/$SHA\""),
-        format!("if [ ! -f \"{binary}\" ]; then"),
-        format!("  echo 'Built binary {binary} not found' >&2"),
+        format!("if [ ! -f \"{source}\" ]; then"),
+        format!("  echo 'Built binary {source} not found' >&2"),
         "  exit 1".to_owned(),
         "fi".to_owned(),
         "mkdir -p \"$VERSION_DIR\"".to_owned(),
-        format!("install -m 755 \"{binary}\" \"$VERSION_DIR/{base}\""),
+        format!("install -m 755 \"{source}\" \"$VERSION_DIR/{base}\""),
         format!("ln -sfn \"$VERSION_DIR/{base}\" \"{install}.new\""),
         format!("mv -T \"{install}.new\" \"{install}\""),
     ]
@@ -158,6 +169,51 @@ impl ScriptComponent for DeployComponent {
         lines.extend(log_lines("SHA", "deploy", &self.name));
         lines.extend(gc_lines(&self.name, &self.install));
         lines.push(status_echo(&format!("Deploy of {} complete", self.repo)));
+        lines
+    }
+}
+
+/// Install a binary built on the operator's machine and already uploaded
+/// to `staged`, without touching git or building on the server. The
+/// version label is `local-<first 12 hex of its sha256>`, so the binary is
+/// preserved, logged and garbage-collected exactly like a git deploy and
+/// `harbor rollback` steps across both kinds.
+pub struct LocalDeployComponent {
+    pub name: String,
+    /// Absolute path of the uploaded file on the server.
+    pub staged: String,
+    /// Basename under the versioned dir — the `binary:` basename of the
+    /// deploy entry, so rollback finds it.
+    pub base: String,
+    pub install: String,
+    pub services: Vec<String>,
+    pub health_check: Vec<String>,
+}
+
+impl ScriptComponent for LocalDeployComponent {
+    fn render(&self) -> Vec<String> {
+        let staged = &self.staged;
+        let mut lines = vec![
+            status_echo(&format!("Installing local build of {}", self.name)),
+            install_root_preamble(),
+            format!("SHA=\"local-$(sha256sum \"{staged}\" | cut -c1-12)\""),
+            "echo \"version $SHA\"".to_owned(),
+        ];
+        lines.extend(install_version_lines(
+            &self.name,
+            staged,
+            &self.base,
+            &self.install,
+        ));
+        lines.push(format!("rm -f \"{staged}\""));
+        lines.extend(restart_lines(&self.services));
+        lines.extend(self.health_check.iter().cloned());
+        lines.extend(log_lines("SHA", "deploy", &self.name));
+        lines.extend(gc_lines(&self.name, &self.install));
+        lines.push(status_echo(&format!(
+            "Deploy of local {} complete",
+            self.name
+        )));
         lines
     }
 }

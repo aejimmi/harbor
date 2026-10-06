@@ -63,6 +63,8 @@ setup:
 
 `harbor up` creates the volume, or reattaches an existing one with that name, and mounts it by UUID with `nofail` before any directories, files or services are set up. A volume that already has a filesystem is never reformatted. `harbor down` detaches the volume and keeps it, and `harbor status` shows its usage. Volumes work with `harbor up` only, not fleets.
 
+Firewall rules can be limited to one source: `- { port: 5432, proto: tcp, from: 203.0.113.7 }` (an IP or CIDR).
+
 More configs — container services, backups, fleets — are in [`examples/`](examples/).
 
 ## Fleet
@@ -87,6 +89,7 @@ harbor fleet down staging
 |---|---|
 | `harbor up` / `down` | Create and provision, or destroy |
 | `harbor deploy <name>` | Pull, build, restart (`--all` for every deploy) |
+| `harbor deploy <name> --binary <path>` | Ship a binary built locally (Linux ELF for the server's arch); rollback works across both |
 | `harbor rollback <name> [sha]` | Switch back to an earlier build |
 | `harbor status` | Server state, last deploy, service health |
 | `harbor ssh` / `exec -- <cmd>` | Shell in, or run one command |
